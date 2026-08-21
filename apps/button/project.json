@@ -1,0 +1,7 @@
+{
+  "id": "button",
+  "name": "Button sample",
+  "description": "Hubの左右・中央・Bluetoothボタンを監視し、押されたボタンをUSBシリアルログへ出します。",
+  "warning": "",
+  "origin": "SPIKE-RT v0.2.0 公式 sample/button"
+}

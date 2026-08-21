@@ -1,0 +1,7 @@
+{
+  "id": "led_countdown",
+  "name": "LED countdown",
+  "description": "5×5表示へ9〜0を1秒ごとにカウントダウン表示します。",
+  "warning": "",
+  "origin": "SPIKE-RT v0.2.0 sample/ledを基に作成"
+}
