@@ -1,0 +1,12 @@
+# Local build/output
+site/
+spike-rt/
+build.log
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

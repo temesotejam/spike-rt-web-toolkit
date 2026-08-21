@@ -1,0 +1,7 @@
+{
+  "id": "motor",
+  "name": "Motor sample",
+  "description": "ポートAのモーターを速度300で3秒回し、3秒停止する動作を繰り返します。",
+  "warning": "注意: 実機へ書き込むとポートAのモーターが自動的に動きます。機体を浮かせるか、モーターを外してから試してください。",
+  "origin": "SPIKE-RT v0.2.0 公式 sample/motor"
+}

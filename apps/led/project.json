@@ -1,0 +1,7 @@
+{
+  "id": "led",
+  "name": "LED alphabet sample",
+  "description": "5×5表示へa〜zを2秒ごとに表示し、Hubライトを黄色にします。",
+  "warning": "",
+  "origin": "SPIKE-RT v0.2.0 公式 sample/led"
+}

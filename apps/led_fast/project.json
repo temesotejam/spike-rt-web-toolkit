@@ -1,0 +1,7 @@
+{
+  "id": "led_fast",
+  "name": "LED fast counter",
+  "description": "5×5表示へ0〜9を0.25秒ごとに高速表示します。",
+  "warning": "",
+  "origin": "SPIKE-RT v0.2.0 sample/ledを基に作成"
+}
