@@ -79,6 +79,7 @@ jobs:
             mkdir -p "${TARGET_DIR}"
             cp -a "${APPS_ROOT}/${APP}/." "${TARGET_DIR}/"
 
+            # h/cfg/cdlはアプリ側で上書き可能。無ければ標準構成を生成する。
             if [[ ! -f "${TARGET_DIR}/${APP}.h" ]]; then
               HEADER_GUARD="$(printf '%s_H' "${APP}" |
                 tr '[:lower:]' '[:upper:]' |
@@ -121,10 +122,13 @@ jobs:
         run: |
           set -euxo pipefail
           DOCKERFILE="spike-rt/tools/docker/slim.dockerfile"
+
           sed -i \
             's/curl make libncurses5 python3 git/curl bzip2 make libncurses5 python3 git/' \
             "${DOCKERFILE}"
+
           grep -q "curl bzip2 make libncurses5 python3 git" "${DOCKERFILE}"
+          grep -n "apt install" -A4 "${DOCKERFILE}"
 
       - name: Build pinned SPIKE-RT builder image
         shell: bash
@@ -139,6 +143,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+
           docker run --rm \
             -e SPIKE_RT_APPS_DIR="${SPIKE_RT_APPS_DIR}" \
             -v "${GITHUB_WORKSPACE}/spike-rt:/work" \
@@ -146,35 +151,48 @@ jobs:
             "${SPIKE_RT_IMAGE}" \
             bash -c '
               set -euxo pipefail
+
               export PATH="/usr/local/gcc-arm-none-eabi/bin:${PATH}"
               command -v arm-none-eabi-gcc
               arm-none-eabi-gcc --version
               command -v arm-none-eabi-size
               git config --global --add safe.directory "*"
 
+              echo "=== Configure kernel ==="
               mkdir -p build/obj-primehub_kernel
               cd build/obj-primehub_kernel
-              ../../asp3/configure.rb -T primehub_gcc -f -m ../../common/kernel.mk
+              ../../asp3/configure.rb \
+                -T primehub_gcc \
+                -f \
+                -m ../../common/kernel.mk
+
+              echo "=== Build kernel ==="
               make -j2 libkernel.a
               cd ../..
+
               mkdir -p build/app-logs
 
               while IFS= read -r APP; do
                 test -n "${APP}"
+                echo "=== Build application: ${APP} ==="
+
                 (
                   set -euxo pipefail
                   BUILD_DIR="build/obj-primehub_${APP}"
                   rm -rf "${BUILD_DIR}"
                   mkdir -p "${BUILD_DIR}"
                   cd "${BUILD_DIR}"
+
                   ../../asp3/configure.rb \
                     -T primehub_gcc \
                     -L ../obj-primehub_kernel \
                     -a "../../${SPIKE_RT_APPS_DIR}/${APP}/" \
                     -A "${APP}" \
                     -m ../../common/app.mk
+
                   rm -f asp asp.bin asp.bin.sha256 size.txt
                   make -j2
+
                   test -s asp.bin
                   sha256sum asp.bin > asp.bin.sha256
                   arm-none-eabi-size asp > size.txt
@@ -197,10 +215,12 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
           rm -rf site
           mkdir -p site/firmware
           cp -a web/. site/
           cp build.log site/firmware/build.log
+
           export BUILT_AT
           BUILT_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
@@ -234,6 +254,7 @@ jobs:
 
               output_dir = site_root / app_id
               output_dir.mkdir(parents=True, exist_ok=True)
+
               shutil.copy2(firmware_path, output_dir / "asp.bin")
               shutil.copy2(build_dir / "asp.bin.sha256", output_dir / "asp.bin.sha256")
               shutil.copy2(build_dir / "size.txt", output_dir / "size.txt")
@@ -242,6 +263,7 @@ jobs:
               firmware_bytes = firmware_path.read_bytes()
               sha256 = hashlib.sha256(firmware_bytes).hexdigest()
               size = len(firmware_bytes)
+
               manifest = {
                   "appId": app_id,
                   "appName": metadata.get("name", app_id),
@@ -261,20 +283,24 @@ jobs:
                   "builtAt": os.environ["BUILT_AT"],
                   "repository": os.environ["GITHUB_REPOSITORY"],
               }
+
               (output_dir / "manifest.json").write_text(
                   json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
                   encoding="utf-8",
               )
-              catalog_apps.append({
-                  "id": app_id,
-                  "name": manifest["appName"],
-                  "description": manifest["description"],
-                  "warning": manifest["warning"],
-                  "origin": manifest["origin"],
-                  "size": size,
-                  "sha256": sha256,
-                  "manifest": f"{app_id}/manifest.json",
-              })
+
+              catalog_apps.append(
+                  {
+                      "id": app_id,
+                      "name": manifest["appName"],
+                      "description": manifest["description"],
+                      "warning": manifest["warning"],
+                      "origin": manifest["origin"],
+                      "size": size,
+                      "sha256": sha256,
+                      "manifest": f"{app_id}/manifest.json",
+                  }
+              )
 
           catalog = {
               "defaultApp": "myapp" if "myapp" in app_ids else app_ids[0],
@@ -313,12 +339,15 @@ jobs:
     if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+
     permissions:
       pages: write
       id-token: write
+
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
       - name: Deploy GitHub Pages
         id: deployment

@@ -14,30 +14,95 @@
       <h1>Build &amp; Web Flasher</h1>
       <p>複数のSPIKE-RTプログラムをGitHub Actionsで一括コンパイルし、選択した<code>asp.bin</code>をSPIKE Prime HubへUSB DFUで書き込みます。</p>
     </header>
+
     <section class="card">
       <h2>1. プログラムとファームウェア</h2>
-      <div class="project-picker"><label for="app-select">プログラム</label><select id="app-select" disabled><option>一覧を取得中...</option></select><span id="catalog-status" class="muted">catalog.jsonを確認しています</span></div>
-      <p id="app-description" class="app-description">—</p><p id="app-origin" class="muted">—</p><p id="app-warning" class="notice warning" hidden></p>
-      <div class="actions"><button id="load-latest" type="button" disabled>選択したプログラムを読み込む</button><label class="file-button">ローカルのasp.binを選択<input id="local-file" type="file" accept=".bin,application/octet-stream"></label></div>
-      <dl class="metadata"><div><dt>状態</dt><dd id="firmware-status">未読込</dd></div><div><dt>プログラム</dt><dd id="firmware-program">—</dd></div><div><dt>ファイル</dt><dd id="firmware-name">—</dd></div><div><dt>サイズ</dt><dd id="firmware-size">—</dd></div><div><dt>SHA-256</dt><dd id="firmware-sha">—</dd></div><div><dt>ソースコミット</dt><dd id="source-commit">—</dd></div><div><dt>SPIKE-RTコミット</dt><dd id="spike-rt-commit">—</dd></div><div><dt>書き込み先</dt><dd id="load-address">0x08008000</dd></div></dl>
-      <div class="actions"><button id="download" type="button" disabled>asp.binを保存</button></div>
+
+      <div class="project-picker">
+        <label for="app-select">プログラム</label>
+        <select id="app-select" disabled>
+          <option>一覧を取得中...</option>
+        </select>
+        <span id="catalog-status" class="muted">catalog.jsonを確認しています</span>
+      </div>
+
+      <p id="app-description" class="app-description">—</p>
+      <p id="app-origin" class="muted">—</p>
+      <p id="app-warning" class="notice warning" hidden></p>
+
+      <div class="actions">
+        <button id="load-latest" type="button" disabled>選択したプログラムを読み込む</button>
+        <label class="file-button">
+          ローカルのasp.binを選択
+          <input id="local-file" type="file" accept=".bin,application/octet-stream">
+        </label>
+      </div>
+
+      <dl class="metadata">
+        <div><dt>状態</dt><dd id="firmware-status">未読込</dd></div>
+        <div><dt>プログラム</dt><dd id="firmware-program">—</dd></div>
+        <div><dt>ファイル</dt><dd id="firmware-name">—</dd></div>
+        <div><dt>サイズ</dt><dd id="firmware-size">—</dd></div>
+        <div><dt>SHA-256</dt><dd id="firmware-sha">—</dd></div>
+        <div><dt>ソースコミット</dt><dd id="source-commit">—</dd></div>
+        <div><dt>SPIKE-RTコミット</dt><dd id="spike-rt-commit">—</dd></div>
+        <div><dt>書き込み先</dt><dd id="load-address">0x08008000</dd></div>
+      </dl>
+
+      <div class="actions">
+        <button id="download" type="button" disabled>asp.binを保存</button>
+      </div>
     </section>
+
     <section class="card">
       <h2>2. SPIKE Hubへ接続</h2>
-      <details class="instructions" open><summary>DFUモードでの接続手順</summary><ol><li>Hubの電源を切り、USBケーブルを抜きます。</li><li>Bluetoothボタンを押したままUSBケーブルを接続します。</li><li>ボタンが赤・緑・青に繰り返し点滅したらボタンを離します。</li><li>「Hubに接続」を押し、<strong>LEGO Technic Large Hub in DFU Mode</strong>を選択します。</li></ol></details>
+      <details class="instructions" open>
+        <summary>DFUモードでの接続手順</summary>
+        <ol>
+          <li>Hubの電源を切り、USBケーブルを抜きます。</li>
+          <li>Bluetoothボタンを押したままUSBケーブルを接続します。</li>
+          <li>ボタンが赤・緑・青に繰り返し点滅したらボタンを離します。</li>
+          <li>「Hubに接続」を押し、<strong>LEGO Technic Large Hub in DFU Mode</strong>を選択します。</li>
+        </ol>
+      </details>
+
       <p class="notice warning"><strong>Windows:</strong> 初回のみ、DFUモードのHubへWinUSBドライバーを割り当てる必要がある場合があります。別のUSB機器を選ばないでください。</p>
-      <dl class="metadata compact"><div><dt>WebUSB</dt><dd id="browser-status">確認中</dd></div><div><dt>Hub</dt><dd id="device-status">未接続</dd></div><div><dt>転送サイズ</dt><dd id="transfer-size">—</dd></div></dl>
-      <div class="actions"><button id="connect" type="button">Hubに接続</button><button id="disconnect" type="button" disabled>接続解除</button></div>
+
+      <dl class="metadata compact">
+        <div><dt>WebUSB</dt><dd id="browser-status">確認中</dd></div>
+        <div><dt>Hub</dt><dd id="device-status">未接続</dd></div>
+        <div><dt>転送サイズ</dt><dd id="transfer-size">—</dd></div>
+      </dl>
+
+      <div class="actions">
+        <button id="connect" type="button">Hubに接続</button>
+        <button id="disconnect" type="button" disabled>接続解除</button>
+      </div>
     </section>
+
     <section class="card">
       <h2>3. 書き込み</h2>
       <p>アプリ領域<code>0x08008000</code>以外への書き込みと、992 KiBを超えるファイルはコード上で拒否します。処理はセクタ消去、分割書き込み、DFU状態確認、SPIKE-RT v0.2.0公式と同じブート先<code>0x08000000</code>を指定したDFU終了・再起動の順に行います。</p>
-      <label class="confirmation"><input id="confirm-safety" type="checkbox"><span>対象がSPIKE Prime HubのDFUモードであり、処理中にUSBケーブルを抜かないことを確認しました。</span></label>
-      <div class="actions"><button id="flash" type="button" disabled>書き込み開始</button></div>
-      <p id="progress-label" class="progress-label">待機中</p><progress id="progress" max="100" value="0"></progress><pre id="log" aria-live="polite">準備完了</pre>
-      <p class="notice">WebUSB実装は実機でDFU接続、セクタ消去、ファームウェア書き込み、DFU終了・再起動、SPIKE-RTアプリ起動まで確認済みです。</p>
+
+      <label class="confirmation">
+        <input id="confirm-safety" type="checkbox">
+        <span>対象がSPIKE Prime HubのDFUモードであり、処理中にUSBケーブルを抜かないことを確認しました。</span>
+      </label>
+
+      <div class="actions">
+        <button id="flash" type="button" disabled>書き込み開始</button>
+      </div>
+
+      <p id="progress-label" class="progress-label">待機中</p>
+      <progress id="progress" max="100" value="0"></progress>
+      <pre id="log" aria-live="polite">準備完了</pre>
+
+      <p class="notice">WebUSB実装は実機でDFU接続、セクタ消去、ファームウェア書き込みまで確認済みです。書き込み後の全バイトUPLOAD読み戻しはSPIKE PrimeのDFUで転送エラーになったため使用せず、SPIKE-RT v0.2.0公式の書き込み手順に合わせて各転送のDFU状態を確認します。</p>
     </section>
-    <footer><p>対象: LEGO SPIKE Prime Hub / VID 0694 / PID 0008 / USB DFU (DfuSe) / 0x08008000</p></footer>
+
+    <footer>
+      <p>対象: LEGO SPIKE Prime Hub / VID 0694 / PID 0008 / USB DFU (DfuSe) / 0x08008000</p>
+    </footer>
   </main>
   <script type="module" src="./app.js"></script>
 </body>

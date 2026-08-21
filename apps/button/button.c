@@ -4,6 +4,8 @@
  *                    Graduate School of Information Science, Nagoya Univ., JAPAN
  */
 
+
+
 #include <t_syslog.h>
 #include "kernel_cfg.h"
 #include "button.h"
@@ -28,7 +30,11 @@ static hub_button_t wait_for_hub_buttons(hub_button_t buttons_to_watch)
   return buttons;
 }
 
-void main_task(intptr_t exinf)
+/*
+ *  メインタスク
+ */
+void
+main_task(intptr_t exinf)
 {
   syslog(LOG_NOTICE, "BUTTON");
   dly_tsk(3000000);
