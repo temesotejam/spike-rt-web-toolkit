@@ -1,0 +1,61 @@
+name: Bootstrap from verified SPIKE-RT web baseline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/bootstrap-from-web-project.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout toolkit repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Import hardware-verified baseline
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          SOURCE_REPO="https://github.com/temesotejam/spike-rt-web-project.git"
+          SOURCE_COMMIT="599e7eaffca891e422489b78fb8e3ad903e2d2ac"
+          TMP_DIR="$(mktemp -d)"
+
+          git clone "${SOURCE_REPO}" "${TMP_DIR}/source"
+          git -C "${TMP_DIR}/source" checkout --detach "${SOURCE_COMMIT}"
+
+          rsync -a --delete \
+            --exclude '.git/' \
+            "${TMP_DIR}/source/" ./
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("README.md")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace("# SPIKE-RT Web Project", "# SPIKE-RT Web Toolkit", 1)
+          marker = "`github.dev`でSPIKE-RTアプリを編集し、GitHub Actionsでコンパイルし、GitHub PagesからSPIKE Prime HubへWebUSB DFU書き込みするための公開プロジェクトです。"
+          replacement = marker + "\n\nこのリポジトリは、実機でEnd-to-End動作確認済みの `temesotejam/spike-rt-web-project` (`599e7eaffca891e422489b78fb8e3ad903e2d2ac`) を基準に、Web Serialデバッグ、WinUSBセットアップ支援、UI改善などを発展させるためのツールキットです。"
+          text = text.replace(marker, replacement, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to import."
+            exit 0
+          fi
+
+          git commit -m "Import hardware-verified SPIKE-RT web baseline"
+          git push origin HEAD:main
