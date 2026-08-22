@@ -72,8 +72,11 @@ jobs:
           for APP in "${APPS[@]}"; do
             [[ "${APP}" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]]
             test -f "${APPS_ROOT}/${APP}/${APP}.c"
-            test -f "${APPS_ROOT}/${APP}/project.json"
-            python3 -m json.tool "${APPS_ROOT}/${APP}/project.json" >/dev/null
+
+            # project.json is optional. When present, validate its JSON syntax.
+            if [[ -f "${APPS_ROOT}/${APP}/project.json" ]]; then
+              python3 -m json.tool "${APPS_ROOT}/${APP}/project.json" >/dev/null
+            fi
 
             TARGET_DIR="spike-rt/${SPIKE_RT_APPS_DIR}/${APP}"
             mkdir -p "${TARGET_DIR}"
@@ -243,9 +246,12 @@ jobs:
           catalog_apps = []
           for app_id in app_ids:
               metadata_path = apps_root / app_id / "project.json"
-              metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-              if metadata.get("id") != app_id:
-                  raise SystemExit(f"{metadata_path}: id must be {app_id!r}")
+              metadata = {}
+              if metadata_path.is_file():
+                  metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                  configured_id = metadata.get("id", app_id)
+                  if configured_id != app_id:
+                      raise SystemExit(f"{metadata_path}: id must be {app_id!r}")
 
               build_dir = build_root / f"obj-primehub_{app_id}"
               firmware_path = build_dir / "asp.bin"
