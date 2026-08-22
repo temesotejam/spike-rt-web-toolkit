@@ -9,148 +9,192 @@
 </head>
 <body>
   <main class="container">
-    <header>
-      <p class="eyebrow">SPIKE-RT</p>
-      <h1>Web Toolkit</h1>
-      <p>複数のSPIKE-RTプログラムをGitHub Actionsで一括コンパイルし、選択した<code>asp.bin</code>をSPIKE Prime HubへUSB DFUで書き込み、実行中のUSBシリアルログをブラウザで確認します。</p>
+    <header class="app-header">
+      <div class="brand-block">
+        <p class="eyebrow">SPIKE-RT</p>
+        <h1>Web Toolkit</h1>
+        <p class="header-summary">ビルド済みアプリの書き込みとUSBシリアルデバッグをブラウザから行います。</p>
+      </div>
     </header>
 
-    <section class="card">
-      <h2>1. プログラムとファームウェア</h2>
+    <nav class="page-nav" aria-label="ツール">
+      <a id="nav-flash" class="page-nav-link" href="#flash" data-page-link="flash">書き込み</a>
+      <a id="nav-debug" class="page-nav-link" href="#debug" data-page-link="debug">デバッグ</a>
+      <a id="nav-setup" class="page-nav-link" href="#setup" data-page-link="setup">Windows 初回設定</a>
+    </nav>
 
-      <div class="project-picker">
-        <label for="app-select">プログラム</label>
-        <select id="app-select" disabled>
-          <option>一覧を取得中...</option>
-        </select>
-        <span id="catalog-status" class="muted">catalog.jsonを確認しています</span>
-      </div>
+    <section id="page-flash" class="page-panel" data-page-panel="flash" aria-labelledby="nav-flash">
+      <div class="workspace-grid">
+        <section class="card compact-card">
+          <div class="card-heading">
+            <div>
+              <p class="section-kicker">FIRMWARE</p>
+              <h2>プログラム</h2>
+            </div>
+            <span class="status-pill"><span id="firmware-status">未読込</span></span>
+          </div>
 
-      <p id="app-description" class="app-description">—</p>
-      <p id="app-origin" class="muted">—</p>
-      <p id="app-warning" class="notice warning" hidden></p>
+          <div class="project-picker compact-picker">
+            <label for="app-select">プログラム</label>
+            <select id="app-select" disabled>
+              <option>一覧を取得中...</option>
+            </select>
+            <span id="catalog-status" class="muted">catalog.jsonを確認しています</span>
+          </div>
 
-      <div class="actions">
-        <button id="load-latest" type="button" disabled>選択したプログラムを読み込む</button>
-        <label class="file-button">
-          ローカルのasp.binを選択
-          <input id="local-file" type="file" accept=".bin,application/octet-stream">
-        </label>
-      </div>
+          <p id="app-description" class="app-description">—</p>
+          <p id="app-origin" class="muted">—</p>
+          <p id="app-warning" class="notice warning" hidden></p>
 
-      <dl class="metadata">
-        <div><dt>状態</dt><dd id="firmware-status">未読込</dd></div>
-        <div><dt>プログラム</dt><dd id="firmware-program">—</dd></div>
-        <div><dt>ファイル</dt><dd id="firmware-name">—</dd></div>
-        <div><dt>サイズ</dt><dd id="firmware-size">—</dd></div>
-        <div><dt>SHA-256</dt><dd id="firmware-sha">—</dd></div>
-        <div><dt>ソースコミット</dt><dd id="source-commit">—</dd></div>
-        <div><dt>SPIKE-RTコミット</dt><dd id="spike-rt-commit">—</dd></div>
-        <div><dt>書き込み先</dt><dd id="load-address">0x08008000</dd></div>
-      </dl>
+          <div class="actions compact-actions">
+            <button id="load-latest" class="primary-action" type="button" disabled>読み込む</button>
+            <label class="file-button">
+              ローカルasp.bin
+              <input id="local-file" type="file" accept=".bin,application/octet-stream">
+            </label>
+          </div>
 
-      <div class="actions">
-        <button id="download" type="button" disabled>asp.binを保存</button>
+          <details class="compact-details">
+            <summary>ファームウェア詳細</summary>
+            <dl class="metadata dense">
+              <div><dt>プログラム</dt><dd id="firmware-program">—</dd></div>
+              <div><dt>ファイル</dt><dd id="firmware-name">—</dd></div>
+              <div><dt>サイズ</dt><dd id="firmware-size">—</dd></div>
+              <div><dt>SHA-256</dt><dd id="firmware-sha">—</dd></div>
+              <div><dt>ソース</dt><dd id="source-commit">—</dd></div>
+              <div><dt>SPIKE-RT</dt><dd id="spike-rt-commit">—</dd></div>
+              <div><dt>書き込み先</dt><dd id="load-address">0x08008000</dd></div>
+            </dl>
+            <div class="actions compact-actions details-actions">
+              <button id="download" type="button" disabled>asp.binを保存</button>
+            </div>
+          </details>
+        </section>
+
+        <section class="card compact-card">
+          <div class="card-heading">
+            <div>
+              <p class="section-kicker">WEBUSB DFU</p>
+              <h2>Hubへ書き込み</h2>
+            </div>
+          </div>
+
+          <dl class="status-strip">
+            <div><dt>WebUSB</dt><dd id="browser-status">確認中</dd></div>
+            <div><dt>Hub</dt><dd id="device-status">未接続</dd></div>
+            <div><dt>転送</dt><dd id="transfer-size">—</dd></div>
+          </dl>
+
+          <div class="actions compact-actions">
+            <button id="connect" class="primary-action" type="button">Hubに接続</button>
+            <button id="disconnect" type="button" disabled>接続解除</button>
+          </div>
+
+          <details class="compact-details">
+            <summary>DFUモードの入り方</summary>
+            <ol class="compact-steps">
+              <li>Hubの電源を切りUSBケーブルを抜きます。</li>
+              <li>Bluetoothボタンを押したままUSBを接続します。</li>
+              <li>赤・緑・青に繰り返し点滅したらボタンを離します。</li>
+              <li>「Hubに接続」からDFU ModeのHubを選択します。</li>
+            </ol>
+          </details>
+
+          <p class="notice warning compact-notice"><strong>Windows:</strong> Hubを選択できない場合は <a href="#setup">Windows 初回設定</a> を開いてください。</p>
+
+          <label class="confirmation compact-confirmation">
+            <input id="confirm-safety" type="checkbox">
+            <span>DFUモードのSPIKE Prime Hubで、処理中にUSBを抜かないことを確認しました。</span>
+          </label>
+
+          <div class="flash-row">
+            <button id="flash" class="primary-action flash-button" type="button" disabled>書き込み開始</button>
+            <div class="progress-block">
+              <p id="progress-label" class="progress-label">待機中</p>
+              <progress id="progress" max="100" value="0"></progress>
+            </div>
+          </div>
+
+          <details class="compact-details log-details">
+            <summary>書き込みログ</summary>
+            <pre id="log" aria-live="polite">準備完了</pre>
+          </details>
+
+          <details class="compact-details">
+            <summary>書き込み方式と安全制限</summary>
+            <p class="muted details-text">アプリ領域<code>0x08008000</code>以外と992 KiB超のファイルは拒否します。セクタ消去、分割書き込み、DFU状態確認後、SPIKE-RT v0.2.0公式と同じ<code>0x08000000</code>を指定してDFUを終了します。</p>
+          </details>
+        </section>
       </div>
     </section>
 
-    <section class="card setup-download">
-      <img class="setup-download-icon" src="./assets/winusb-setup-icon.svg" alt="" aria-hidden="true">
-      <div class="setup-download-content">
-        <h2>Windows 初回設定</h2>
-        <p>WindowsでこのページのWebUSB書き込みを初めて使うPCでは、DFUモードのHubへWinUSBを設定する必要がある場合があります。専用ツールはLEGO SPIKE Prime / Technic Large HubのDFUモード <code>0694:0008</code> だけを対象にします。</p>
-
-        <div class="actions">
-          <a class="button-link primary" href="https://github.com/temesotejam/spike-rt-dfu-winusb-setup/releases/download/v0.3.0/SPIKE-RT-DFU-WinUSB-Setup-v0.3.exe">WinUSBセットアップをダウンロード</a>
-          <a class="button-link" href="https://github.com/temesotejam/spike-rt-dfu-winusb-setup/releases" target="_blank" rel="noopener">Releasesを開く</a>
+    <section id="page-debug" class="page-panel" data-page-panel="debug" aria-labelledby="nav-debug" hidden>
+      <section class="card debug-card">
+        <div class="card-heading debug-heading">
+          <div>
+            <p class="section-kicker">WEB SERIAL</p>
+            <h2>USBシリアルデバッグ</h2>
+            <p class="muted heading-note">SPIKE-RTが通常起動しているHubのCOMポートを選びます。</p>
+          </div>
+          <dl class="status-strip debug-status">
+            <div><dt>Web Serial</dt><dd id="serial-browser-status">確認中</dd></div>
+            <div><dt>USBシリアル</dt><dd id="serial-device-status">未接続</dd></div>
+            <div><dt>速度</dt><dd id="serial-baud-rate">115200 bps</dd></div>
+          </dl>
         </div>
 
-        <details class="instructions">
-          <summary>初回設定の手順</summary>
-          <ol>
-            <li>上のボタンからWindows用の単一EXEをダウンロードします。</li>
-            <li>HubをDFUモードにしてUSB接続します。</li>
-            <li><code>SPIKE-RT-DFU-WinUSB-Setup-v0.3.exe</code>を起動します。</li>
-            <li>「準備完了」と表示されたらツールを閉じ、このページへ戻ります。</li>
-          </ol>
+        <div class="actions compact-actions debug-actions">
+          <button id="serial-connect" class="primary-action" type="button">デバッグ接続</button>
+          <button id="serial-disconnect" type="button" disabled>接続解除</button>
+          <button id="serial-clear" type="button">ログをクリア</button>
+        </div>
+
+        <pre id="serial-log" class="serial-console" aria-live="polite">デバッグ接続待ち</pre>
+
+        <details class="compact-details">
+          <summary>接続で迷ったとき</summary>
+          <p class="muted details-text">Chrome / Edgeのシリアルポート選択画面からSPIKE-RTのCOMポートを選びます。必要ならWindowsのデバイスマネージャー「ポート (COMとLPT)」でCOM番号を確認してください。DFUモードではなく通常起動したHubを使います。</p>
         </details>
-
-        <p class="notice">WinUSBセットアップはDFU用USB <code>0694:0008</code> だけを対象とし、SPIKE-RT実行中のUSBシリアル / COMポートは変更しません。すでにWinUSB設定済みの場合は何も変更せず「準備完了」と表示します。</p>
-        <p class="muted">配布版: v0.3.0 pre-release / Windows x64 / 単一EXE。新規WinUSB割り当て経路は未設定PCでの最終実機確認待ちです。</p>
-      </div>
+      </section>
     </section>
 
-    <section class="card">
-      <h2>2. SPIKE Hubへ接続</h2>
-      <details class="instructions" open>
-        <summary>DFUモードでの接続手順</summary>
-        <ol>
-          <li>Hubの電源を切り、USBケーブルを抜きます。</li>
-          <li>Bluetoothボタンを押したままUSBケーブルを接続します。</li>
-          <li>ボタンが赤・緑・青に繰り返し点滅したらボタンを離します。</li>
-          <li>「Hubに接続」を押し、<strong>LEGO Technic Large Hub in DFU Mode</strong>を選択します。</li>
+    <section id="page-setup" class="page-panel" data-page-panel="setup" aria-labelledby="nav-setup" hidden>
+      <section class="card setup-page-card">
+        <div class="setup-hero">
+          <img class="setup-download-icon" src="./assets/winusb-setup-icon.svg" alt="" aria-hidden="true">
+          <div>
+            <p class="section-kicker">WINDOWS / WEBUSB</p>
+            <h2>Windows 初回設定</h2>
+            <p>WebUSBでDFU Hubを選択できないPCでは、専用ツールでDFUモードのHubだけをWinUSBへ設定します。</p>
+          </div>
+        </div>
+
+        <div class="actions setup-actions">
+          <a class="button-link primary" href="https://github.com/temesotejam/spike-rt-dfu-winusb-setup/releases/download/v0.3.0/SPIKE-RT-DFU-WinUSB-Setup-v0.3.exe">WinUSBセットアップをダウンロード</a>
+          <a class="button-link" href="https://github.com/temesotejam/spike-rt-dfu-winusb-setup/releases" target="_blank" rel="noopener">Releases</a>
+        </div>
+
+        <ol class="setup-steps">
+          <li><span>1</span><div><strong>EXEをダウンロード</strong><p>Windows x64用の単一EXEです。</p></div></li>
+          <li><span>2</span><div><strong>HubをDFUモードで接続</strong><p>Bluetoothボタンを押しながらUSBを接続します。</p></div></li>
+          <li><span>3</span><div><strong>EXEを起動</strong><p>対象Hubを自動確認し、必要な場合だけWinUSB設定を案内します。</p></div></li>
+          <li><span>4</span><div><strong>「準備完了」を確認</strong><p>ツールを閉じて「書き込み」へ戻ります。</p></div></li>
         </ol>
-      </details>
 
-      <p class="notice warning"><strong>Windows:</strong> WebUSBでHubを選択できない場合は、上の「Windows 初回設定」から専用WinUSBセットアップを実行してください。</p>
+        <p class="notice compact-notice">対象はDFU用USB <code>0694:0008</code>だけです。SPIKE-RT実行中のUSBシリアル / COMポートには触れません。設定済みPCでは何も変更せず終了します。</p>
+        <p class="muted setup-version">v0.3.0 pre-release / 新規WinUSB割り当て経路のみ未設定PCでの最終実機確認待ち</p>
 
-      <dl class="metadata compact">
-        <div><dt>WebUSB</dt><dd id="browser-status">確認中</dd></div>
-        <div><dt>Hub</dt><dd id="device-status">未接続</dd></div>
-        <div><dt>転送サイズ</dt><dd id="transfer-size">—</dd></div>
-      </dl>
-
-      <div class="actions">
-        <button id="connect" type="button">Hubに接続</button>
-        <button id="disconnect" type="button" disabled>接続解除</button>
-      </div>
-    </section>
-
-    <section class="card">
-      <h2>3. 書き込み</h2>
-      <p>アプリ領域<code>0x08008000</code>以外への書き込みと、992 KiBを超えるファイルはコード上で拒否します。処理はセクタ消去、分割書き込み、DFU状態確認、SPIKE-RT v0.2.0公式と同じブート先<code>0x08000000</code>を指定したDFU終了・再起動の順に行います。</p>
-
-      <label class="confirmation">
-        <input id="confirm-safety" type="checkbox">
-        <span>対象がSPIKE Prime HubのDFUモードであり、処理中にUSBケーブルを抜かないことを確認しました。</span>
-      </label>
-
-      <div class="actions">
-        <button id="flash" type="button" disabled>書き込み開始</button>
-      </div>
-
-      <p id="progress-label" class="progress-label">待機中</p>
-      <progress id="progress" max="100" value="0"></progress>
-      <pre id="log" aria-live="polite">準備完了</pre>
-
-      <p class="notice">WebUSB実装は実機でDFU接続、セクタ消去、ファームウェア書き込み、DFU終了・再起動、SPIKE-RTアプリ実行まで確認済みです。書き込み後の全バイトUPLOAD読み戻しはSPIKE PrimeのDFUで転送エラーになったため使用せず、SPIKE-RT v0.2.0公式の書き込み手順に合わせて各転送のDFU状態を確認します。</p>
-    </section>
-
-    <section class="card">
-      <h2>4. Web Serialデバッグ</h2>
-      <p>書き込み後、Hubが再起動して<strong>SPIKE-RTアプリが実行中</strong>の状態で接続します。DFUモードではなく、通常起動したHubを選択してください。<code>syslog()</code>などのUSBシリアル出力をブラウザ内で確認できます。</p>
-
-      <dl class="metadata compact">
-        <div><dt>Web Serial</dt><dd id="serial-browser-status">確認中</dd></div>
-        <div><dt>USBシリアル</dt><dd id="serial-device-status">未接続</dd></div>
-        <div><dt>通信速度</dt><dd id="serial-baud-rate">115200 bps</dd></div>
-      </dl>
-
-      <div class="actions">
-        <button id="serial-connect" type="button">デバッグ接続</button>
-        <button id="serial-disconnect" type="button" disabled>接続解除</button>
-        <button id="serial-clear" type="button">ログをクリア</button>
-      </div>
-
-      <pre id="serial-log" aria-live="polite">デバッグ接続待ち</pre>
-
-      <p class="notice">「デバッグ接続」を押すと、Chrome / EdgeがWindowsで利用可能なシリアルポートを表示します。Web側ではVID/PIDで候補を絞り込まず、SPIKE-RTが使用しているCOMポートをユーザーが選択します。必要ならWindowsのデバイスマネージャーの「ポート (COMとLPT)」でCOM番号を確認してください。接続後は115200 bpsで開き、取得できるVID/PIDは参考情報として画面に表示します。</p>
+        <div class="actions compact-actions">
+          <a class="button-link" href="#flash">書き込み画面へ戻る</a>
+        </div>
+      </section>
     </section>
 
     <footer>
-      <p>対象: LEGO SPIKE Prime Hub / WebUSB DFU 0694:0008 / Web Serial 115200 bps / COMポート手動選択</p>
+      <p>LEGO SPIKE Prime Hub / WebUSB DFU 0694:0008 / Web Serial 115200 bps</p>
     </footer>
   </main>
+  <script type="module" src="./nav.js"></script>
   <script type="module" src="./app.js"></script>
   <script type="module" src="./serial-ui.js"></script>
 </body>
