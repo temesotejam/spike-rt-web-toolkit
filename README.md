@@ -16,26 +16,25 @@ SPIKE-RTアプリを`github.dev`で編集し、GitHub Actionsでビルドし、G
 - DFU終了時は公式`pydfu.py`と同様に`0x08000000`をブート先として指定
 - 書き込みごとにUSB転送サイズとDFU状態を確認
 - Web SerialでSPIKE-RTのUSBシリアルログをブラウザ表示
-- Web Serialは115200 bps、実行時USB ID `0x0483:0x5740`で候補を絞り込み
+- Web Serialは115200 bps
+- Web Serialのポート候補はVID/PIDで絞り込まず、ブラウザのシリアルポート選択画面からユーザーが選択
 
 ## Web Serialデバッグ
 
 SPIKE-RT v0.2.0公式ドキュメントでは、実行中のHubのログをUSBシリアル`/dev/ttyACM0`へ115200 bpsで接続して確認します。このリポジトリでは同じログをChrome / EdgeのWeb Serial APIでブラウザ内に表示します。
 
-SPIKE-RT実行時のUSB CDC記述子は次の値です。
+Windowsでは、必要に応じてデバイスマネージャーの「ポート (COMとLPT)」でSPIKE-RTが使用しているCOM番号を確認します。Pagesの「デバッグ接続」を押すと、Chrome / Edgeが利用可能なシリアルポートを表示するので、そのCOMポートを選択します。
 
-- VID: `0x0483`
-- PID: `0x5740`
-- manufacturer: `STMicroelectronics`
-- product: `Pybricks Hub`
+Web側ではVID/PIDによるフィルタや接続拒否を行いません。USB記述子の違いに依存せず、選択されたポートを115200 bpsで開きます。`getInfo()`で取得できるVID/PIDは、接続後に参考情報として表示します。
 
 使い方は次の流れです。
 
 ```text
 WebUSBでasp.binを書き込む
 → HubがDFUを終了してSPIKE-RTを起動
+→ 必要ならデバイスマネージャーでCOM番号を確認
 → Pagesの「デバッグ接続」を押す
-→ Pybricks Hubを選ぶ
+→ SPIKE-RTのCOMポートを選ぶ
 → syslog()の出力をブラウザで確認
 ```
 
