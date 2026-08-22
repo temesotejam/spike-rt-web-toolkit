@@ -9,6 +9,8 @@ SPIKE-RTアプリを`github.dev`で編集し、GitHub Actionsでビルドし、G
 - `github.dev`でCソースを編集
 - GitHub ActionsでSPIKE-RT v0.2.0を固定ビルド
 - `apps/`以下の複数アプリを一括ビルド
+- 新しいアプリは基本的に`apps/<app>/<app>.c`だけで追加可能
+- `project.json`は表示名・説明・警告などを付けたい場合だけ使用
 - GitHub Pagesからアプリを選択
 - SHA-256確認
 - WebUSB / DfuSeでSPIKE Prime Hubへ書き込み
@@ -19,6 +21,52 @@ SPIKE-RTアプリを`github.dev`で編集し、GitHub Actionsでビルドし、G
 - Web SerialでSPIKE-RTのUSBシリアルログをブラウザ表示
 - Web Serialは115200 bps
 - Web Serialのポート候補はVID/PIDで絞り込まず、ブラウザのシリアルポート選択画面からユーザーが選択
+
+## アプリを追加する
+
+最小構成では、`apps/`の下にフォルダを作り、**フォルダ名と同じ名前のCファイルを1個置くだけ**です。
+
+```text
+apps/
+└─ hello/
+   └─ hello.c
+```
+
+この場合、GitHub Actionsは`hello`をアプリID・表示名として扱います。`.h`、`.cfg`、`.cdl`は存在しなければ標準構成を自動生成します。
+
+CファイルにはSPIKE-RTアプリのエントリポイント`main_task()`を実装します。
+
+```c
+#include <kernel.h>
+#include <spike/hub/system.h>
+
+void main_task(intptr_t exinf) {
+    // ここに処理を書く
+    ext_tsk();
+}
+```
+
+Pagesに表示する名前や説明を付けたい場合だけ、同じフォルダへ`project.json`を追加します。`project.json`は任意です。
+
+```text
+apps/
+└─ hello/
+   ├─ hello.c
+   └─ project.json   ← 任意
+```
+
+例:
+
+```json
+{
+  "name": "Hello World",
+  "description": "最初のSPIKE-RTアプリ"
+}
+```
+
+`id`も指定できますが、指定する場合はフォルダ名と一致させます。`warning`や`origin`も必要な場合だけ追加できます。
+
+より細かいタスク設定やTECS構成が必要になった場合は、`<app>.h`、`<app>.cfg`、`<app>.cdl`をアプリフォルダへ置くことで自動生成内容を上書きできます。
 
 ## Windows 初回設定
 
