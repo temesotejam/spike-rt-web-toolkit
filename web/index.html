@@ -18,9 +18,9 @@
     </header>
 
     <nav class="page-nav" aria-label="ツール">
-      <a class="page-nav-link" href="#flash" data-page-link="flash">書き込み</a>
-      <a class="page-nav-link" href="#debug" data-page-link="debug">デバッグ</a>
-      <a class="page-nav-link" href="#setup" data-page-link="setup">Windows 初回設定</a>
+      <a id="nav-flash" class="page-nav-link" href="#flash" data-page-link="flash">書き込み</a>
+      <a id="nav-debug" class="page-nav-link" href="#debug" data-page-link="debug">デバッグ</a>
+      <a id="nav-setup" class="page-nav-link" href="#setup" data-page-link="setup">Windows 初回設定</a>
     </nav>
 
     <section id="page-flash" class="page-panel" data-page-panel="flash" aria-labelledby="nav-flash">
@@ -31,7 +31,7 @@
               <p class="section-kicker">FIRMWARE</p>
               <h2>プログラム</h2>
             </div>
-            <span id="firmware-status" class="status-pill">未読込</span>
+            <span class="status-pill"><span id="firmware-status">未読込</span></span>
           </div>
 
           <div class="project-picker compact-picker">
@@ -128,7 +128,7 @@
       </div>
     </section>
 
-    <section id="page-debug" class="page-panel" data-page-panel="debug" hidden>
+    <section id="page-debug" class="page-panel" data-page-panel="debug" aria-labelledby="nav-debug" hidden>
       <section class="card debug-card">
         <div class="card-heading debug-heading">
           <div>
@@ -158,7 +158,7 @@
       </section>
     </section>
 
-    <section id="page-setup" class="page-panel" data-page-panel="setup" hidden>
+    <section id="page-setup" class="page-panel" data-page-panel="setup" aria-labelledby="nav-setup" hidden>
       <section class="card setup-page-card">
         <div class="setup-hero">
           <img class="setup-download-icon" src="./assets/winusb-setup-icon.svg" alt="" aria-hidden="true">
