@@ -1,6 +1,6 @@
 # SPIKE-RT Web Toolkit
 
-SPIKE-RTアプリを`github.dev`で編集し、GitHub Actionsでビルドし、GitHub PagesからSPIKE Prime HubへWebUSB DFU書き込みするためのWebツールキットです。
+SPIKE-RTアプリを`github.dev`で編集し、GitHub Actionsでビルドし、GitHub PagesからSPIKE Prime HubへWebUSB DFU書き込みし、実行中のUSBシリアルログをWeb Serialで確認するためのWebツールキットです。
 
 このリポジトリは、`temesotejam/spike-rt-web-project` の実機確認済みコミット `599e7eaffca891e422489b78fb8e3ad903e2d2ac` を基準にしています。その構成では、GitHub Actionsで生成したSPIKE-RT v0.2.0の`asp.bin`をWebUSBで実機へ書き込み、DFU終了・再起動後にLED countdownが実行されるところまでEnd-to-Endで確認済みです。
 
@@ -15,12 +15,33 @@ SPIKE-RTアプリを`github.dev`で編集し、GitHub Actionsでビルドし、G
 - SPIKE-RTは`0x08008000`へ書き込み
 - DFU終了時は公式`pydfu.py`と同様に`0x08000000`をブート先として指定
 - 書き込みごとにUSB転送サイズとDFU状態を確認
+- Web SerialでSPIKE-RTのUSBシリアルログをブラウザ表示
+- Web Serialは115200 bps、LEGO VID `0x0694`で候補を絞り込み
+- DFU PID `0x0008`はデバッグ接続として拒否
+
+## Web Serialデバッグ
+
+SPIKE-RT v0.2.0公式ドキュメントでは、実行中のHubのログをUSBシリアル`/dev/ttyACM0`へ115200 bpsで接続して確認します。このリポジトリでは同じログをChrome / EdgeのWeb Serial APIでブラウザ内に表示します。
+
+使い方は次の流れです。
+
+```text
+WebUSBでasp.binを書き込む
+→ HubがDFUを終了してSPIKE-RTを起動
+→ Pagesの「デバッグ接続」を押す
+→ SPIKE Prime HubのUSBシリアルを選ぶ
+→ syslog()の出力をブラウザで確認
+```
+
+`button`アプリはWeb Serialの動作確認に向いています。起動時に`BUTTON`を出力し、その後は左右・中央・Bluetoothボタンを押すたびにログを出力します。
+
+Web Serial側はDFU用WinUSBとは別です。通常起動したSPIKE-RTのUSBシリアルドライバをWinUSBへ変更しないでください。WinUSBはDFUモード`VID 0x0694 / PID 0x0008`のWebUSB書き込み用として扱います。
 
 ## 今後の拡張
 
-1. Web Serialデバッグコンソール
-2. WinUSB専用セットアップ支援
-3. UI簡略化・診断機能
+1. WinUSB専用セットアップ支援
+2. UI簡略化・診断機能
+3. Web Serialログの変数表示・グラフ化
 
 ## 収録アプリ
 
@@ -43,6 +64,7 @@ github.devでapps/<app>/<app>.cを編集
 → 書き込み
 → DFU終了・再起動
 → SPIKE-RTアプリを自動実行
+→ Web Serialでログ確認
 ```
 
 ## WebUSB対象
