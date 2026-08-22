@@ -54,6 +54,32 @@
       </div>
     </section>
 
+    <section class="card setup-download">
+      <img class="setup-download-icon" src="./assets/winusb-setup-icon.svg" alt="" aria-hidden="true">
+      <div class="setup-download-content">
+        <h2>Windows 初回設定</h2>
+        <p>WindowsでこのページのWebUSB書き込みを初めて使うPCでは、DFUモードのHubへWinUSBを設定する必要がある場合があります。専用ツールはLEGO SPIKE Prime / Technic Large HubのDFUモード <code>0694:0008</code> だけを対象にします。</p>
+
+        <div class="actions">
+          <a class="button-link primary" href="https://github.com/temesotejam/spike-rt-dfu-winusb-setup/releases/download/v0.3.0/SPIKE-RT-DFU-WinUSB-Setup-v0.3.exe">WinUSBセットアップをダウンロード</a>
+          <a class="button-link" href="https://github.com/temesotejam/spike-rt-dfu-winusb-setup/releases" target="_blank" rel="noopener">Releasesを開く</a>
+        </div>
+
+        <details class="instructions">
+          <summary>初回設定の手順</summary>
+          <ol>
+            <li>上のボタンからWindows用の単一EXEをダウンロードします。</li>
+            <li>HubをDFUモードにしてUSB接続します。</li>
+            <li><code>SPIKE-RT-DFU-WinUSB-Setup-v0.3.exe</code>を起動します。</li>
+            <li>「準備完了」と表示されたらツールを閉じ、このページへ戻ります。</li>
+          </ol>
+        </details>
+
+        <p class="notice">WinUSBセットアップはDFU用USB <code>0694:0008</code> だけを対象とし、SPIKE-RT実行中のUSBシリアル / COMポートは変更しません。すでにWinUSB設定済みの場合は何も変更せず「準備完了」と表示します。</p>
+        <p class="muted">配布版: v0.3.0 pre-release / Windows x64 / 単一EXE。新規WinUSB割り当て経路は未設定PCでの最終実機確認待ちです。</p>
+      </div>
+    </section>
+
     <section class="card">
       <h2>2. SPIKE Hubへ接続</h2>
       <details class="instructions" open>
@@ -66,7 +92,7 @@
         </ol>
       </details>
 
-      <p class="notice warning"><strong>Windows:</strong> 初回のみ、DFUモードのHubへWinUSBドライバーを割り当てる必要がある場合があります。別のUSB機器を選ばないでください。</p>
+      <p class="notice warning"><strong>Windows:</strong> WebUSBでHubを選択できない場合は、上の「Windows 初回設定」から専用WinUSBセットアップを実行してください。</p>
 
       <dl class="metadata compact">
         <div><dt>WebUSB</dt><dd id="browser-status">確認中</dd></div>
