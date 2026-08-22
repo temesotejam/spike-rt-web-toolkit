@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>SPIKE-RT Build & Web Flasher</title>
+  <title>SPIKE-RT Web Toolkit</title>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
   <main class="container">
     <header>
       <p class="eyebrow">SPIKE-RT</p>
-      <h1>Build &amp; Web Flasher</h1>
-      <p>複数のSPIKE-RTプログラムをGitHub Actionsで一括コンパイルし、選択した<code>asp.bin</code>をSPIKE Prime HubへUSB DFUで書き込みます。</p>
+      <h1>Web Toolkit</h1>
+      <p>複数のSPIKE-RTプログラムをGitHub Actionsで一括コンパイルし、選択した<code>asp.bin</code>をSPIKE Prime HubへUSB DFUで書き込み、実行中のUSBシリアルログをブラウザで確認します。</p>
     </header>
 
     <section class="card">
@@ -97,13 +97,35 @@
       <progress id="progress" max="100" value="0"></progress>
       <pre id="log" aria-live="polite">準備完了</pre>
 
-      <p class="notice">WebUSB実装は実機でDFU接続、セクタ消去、ファームウェア書き込みまで確認済みです。書き込み後の全バイトUPLOAD読み戻しはSPIKE PrimeのDFUで転送エラーになったため使用せず、SPIKE-RT v0.2.0公式の書き込み手順に合わせて各転送のDFU状態を確認します。</p>
+      <p class="notice">WebUSB実装は実機でDFU接続、セクタ消去、ファームウェア書き込み、DFU終了・再起動、SPIKE-RTアプリ実行まで確認済みです。書き込み後の全バイトUPLOAD読み戻しはSPIKE PrimeのDFUで転送エラーになったため使用せず、SPIKE-RT v0.2.0公式の書き込み手順に合わせて各転送のDFU状態を確認します。</p>
+    </section>
+
+    <section class="card">
+      <h2>4. Web Serialデバッグ</h2>
+      <p>書き込み後、Hubが再起動して<strong>SPIKE-RTアプリが実行中</strong>の状態で接続します。DFUモードではなく、通常起動したHubを選択してください。<code>syslog()</code>などのUSBシリアル出力をブラウザ内で確認できます。</p>
+
+      <dl class="metadata compact">
+        <div><dt>Web Serial</dt><dd id="serial-browser-status">確認中</dd></div>
+        <div><dt>USBシリアル</dt><dd id="serial-device-status">未接続</dd></div>
+        <div><dt>通信速度</dt><dd id="serial-baud-rate">115200 bps</dd></div>
+      </dl>
+
+      <div class="actions">
+        <button id="serial-connect" type="button">デバッグ接続</button>
+        <button id="serial-disconnect" type="button" disabled>接続解除</button>
+        <button id="serial-clear" type="button">ログをクリア</button>
+      </div>
+
+      <pre id="serial-log" aria-live="polite">デバッグ接続待ち</pre>
+
+      <p class="notice">SPIKE-RT v0.2.0公式ドキュメントのUSBシリアルログと同じく115200 bpsで開きます。ブラウザの選択画面にはLEGOのUSBデバイスだけを候補表示し、選択したVID/PIDを接続後に表示します。DFUモードのPID <code>0x0008</code>はデバッグ接続として拒否します。</p>
     </section>
 
     <footer>
-      <p>対象: LEGO SPIKE Prime Hub / VID 0694 / PID 0008 / USB DFU (DfuSe) / 0x08008000</p>
+      <p>対象: LEGO SPIKE Prime Hub / WebUSB DFU VID 0694 PID 0008 / SPIKE-RT 0x08008000 / Web Serial 115200 bps</p>
     </footer>
   </main>
   <script type="module" src="./app.js"></script>
+  <script type="module" src="./serial-ui.js"></script>
 </body>
 </html>
