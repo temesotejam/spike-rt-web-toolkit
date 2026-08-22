@@ -15,9 +15,29 @@ SPIKE-RTアプリを`github.dev`で編集し、GitHub Actionsでビルドし、G
 - SPIKE-RTは`0x08008000`へ書き込み
 - DFU終了時は公式`pydfu.py`と同様に`0x08000000`をブート先として指定
 - 書き込みごとにUSB転送サイズとDFU状態を確認
+- Windows初回設定用の専用WinUSBセットアップをPagesから案内
 - Web SerialでSPIKE-RTのUSBシリアルログをブラウザ表示
 - Web Serialは115200 bps
 - Web Serialのポート候補はVID/PIDで絞り込まず、ブラウザのシリアルポート選択画面からユーザーが選択
+
+## Windows 初回設定
+
+WindowsでDFUモードのHubをWebUSBから選択できない場合は、GitHub Pagesの「Windows 初回設定」から専用セットアップを取得します。
+
+配布する`SPIKE-RT-DFU-WinUSB-Setup-v0.3.exe`は単一EXEのWindows x64アプリです。対象をLEGO SPIKE Prime / Technic Large HubのDFUモード`VID 0x0694 / PID 0x0008`に限定し、SPIKE-RT実行中のUSBシリアル / COMポートや他のUSB機器は変更しません。
+
+```text
+Pagesの「Windows 初回設定」を開く
+→ WinUSBセットアップをダウンロード
+→ HubをDFUモードでUSB接続
+→ SPIKE-RT-DFU-WinUSB-Setup-v0.3.exeを起動
+→ 「準備完了」を確認
+→ Pagesへ戻ってWebUSB書き込み
+```
+
+すでに`Service=WinUSB`の場合は何も変更せず「準備完了」と表示します。実機ではDFU Hubの検出、LEGOメタデータ確認、設定済みWinUSB判定、設定済み時の無変更動作、非破壊INF生成まで確認済みです。WinUSB未設定PCでの新規ドライバ割り当て経路のみ最終実機確認待ちです。
+
+セットアップ本体は`temesotejam/spike-rt-dfu-winusb-setup`のGitHub Releaseで管理し、このToolkitにはEXEのコピーを置きません。PagesはRelease Assetへのダウンロード導線だけを提供します。
 
 ## Web Serialデバッグ
 
@@ -44,9 +64,8 @@ Web Serial側はDFU用WinUSBとは別です。通常起動したSPIKE-RTのUSB�
 
 ## 今後の拡張
 
-1. WinUSB専用セットアップ支援
-2. UI簡略化・診断機能
-3. Web Serialログの変数表示・グラフ化
+1. UI簡略化・診断機能
+2. Web Serialログの変数表示・グラフ化
 
 ## 収録アプリ
 
@@ -64,6 +83,7 @@ github.devでapps/<app>/<app>.cを編集
 → Commit & Push
 → GitHub Actionsでビルド
 → GitHub Pagesへasp.binを公開
+→ 必要ならWindows初回WinUSB設定
 → SPIKE Prime HubをDFUモードにする
 → PagesからHubへ接続
 → 書き込み
@@ -81,7 +101,7 @@ github.devでapps/<app>/<app>.cを編集
 - boot address: `0x08000000`
 - 最大サイズ: 992 KiB
 
-WindowsではWebUSB利用のためDFUデバイスへWinUSBドライバを割り当てる必要がある場合があります。今後、この初期設定を安全に行う専用ツールを追加する予定です。
+WindowsでWebUSB利用のためにDFUデバイスへWinUSBを割り当てる必要がある場合は、Pagesの「Windows 初回設定」から専用セットアップを利用します。
 
 ## GitHub Pages
 
