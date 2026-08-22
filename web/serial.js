@@ -1,5 +1,3 @@
-export const SPIKE_RT_SERIAL_VENDOR_ID = 0x0483;
-export const SPIKE_RT_SERIAL_PRODUCT_ID = 0x5740;
 export const SPIKE_RT_SERIAL_BAUD_RATE = 115200;
 
 export function isWebSerialAvailable() {
@@ -30,26 +28,6 @@ export class SpikeSerialConnection {
   }
 
   async open() {
-    const { usbVendorId, usbProductId } = this.info;
-
-    if (
-      Number.isInteger(usbVendorId) &&
-      usbVendorId !== SPIKE_RT_SERIAL_VENDOR_ID
-    ) {
-      throw new Error(
-        `SPIKE-RT USBシリアルではありません (VID=${formatUsbId(usbVendorId)})。`,
-      );
-    }
-
-    if (
-      Number.isInteger(usbProductId) &&
-      usbProductId !== SPIKE_RT_SERIAL_PRODUCT_ID
-    ) {
-      throw new Error(
-        `SPIKE-RT USBシリアルではありません (PID=${formatUsbId(usbProductId)})。`,
-      );
-    }
-
     await this.port.open({ baudRate: SPIKE_RT_SERIAL_BAUD_RATE });
     this.readTask = this.readLoop();
     return this;
@@ -136,14 +114,10 @@ export async function connectSpikeSerial(callbacks = {}) {
     );
   }
 
-  const port = await navigator.serial.requestPort({
-    filters: [
-      {
-        usbVendorId: SPIKE_RT_SERIAL_VENDOR_ID,
-        usbProductId: SPIKE_RT_SERIAL_PRODUCT_ID,
-      },
-    ],
-  });
+  // Do not filter by VID/PID here. The browser shows the serial ports that
+  // Windows exposes, and the user chooses the SPIKE-RT COM port explicitly.
+  // This avoids coupling the debug console to a particular USB descriptor.
+  const port = await navigator.serial.requestPort();
 
   const connection = new SpikeSerialConnection(port, callbacks);
   try {
