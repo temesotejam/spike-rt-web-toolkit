@@ -118,11 +118,11 @@
 
       <pre id="serial-log" aria-live="polite">デバッグ接続待ち</pre>
 
-      <p class="notice">SPIKE-RT v0.2.0公式ドキュメントのUSBシリアルログと同じく115200 bpsで開きます。ブラウザの選択画面にはLEGOのUSBデバイスだけを候補表示し、選択したVID/PIDを接続後に表示します。DFUモードのPID <code>0x0008</code>はデバッグ接続として拒否します。</p>
+      <p class="notice">SPIKE-RT v0.2.0の実行時USBシリアルはSTM32 Virtual COM Port互換の<code>VID 0x0483 / PID 0x5740</code>で列挙されます。115200 bpsで開き、ブラウザの選択画面もこのVID/PIDに限定します。表示された場合は<strong>Pybricks Hub</strong>を選択してください。DFU用の<code>VID 0x0694 / PID 0x0008</code>とは別デバイスです。</p>
     </section>
 
     <footer>
-      <p>対象: LEGO SPIKE Prime Hub / WebUSB DFU VID 0694 PID 0008 / SPIKE-RT 0x08008000 / Web Serial 115200 bps</p>
+      <p>対象: LEGO SPIKE Prime Hub / WebUSB DFU 0694:0008 / SPIKE-RT Web Serial 0483:5740 / 115200 bps</p>
     </footer>
   </main>
   <script type="module" src="./app.js"></script>

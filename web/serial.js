@@ -1,5 +1,5 @@
-export const LEGO_USB_VENDOR_ID = 0x0694;
-export const SPIKE_DFU_PRODUCT_ID = 0x0008;
+export const SPIKE_RT_SERIAL_VENDOR_ID = 0x0483;
+export const SPIKE_RT_SERIAL_PRODUCT_ID = 0x5740;
 export const SPIKE_RT_SERIAL_BAUD_RATE = 115200;
 
 export function isWebSerialAvailable() {
@@ -34,16 +34,19 @@ export class SpikeSerialConnection {
 
     if (
       Number.isInteger(usbVendorId) &&
-      usbVendorId !== LEGO_USB_VENDOR_ID
+      usbVendorId !== SPIKE_RT_SERIAL_VENDOR_ID
     ) {
       throw new Error(
-        `LEGO USBデバイスではありません (VID=${formatUsbId(usbVendorId)})。`,
+        `SPIKE-RT USBシリアルではありません (VID=${formatUsbId(usbVendorId)})。`,
       );
     }
 
-    if (usbProductId === SPIKE_DFU_PRODUCT_ID) {
+    if (
+      Number.isInteger(usbProductId) &&
+      usbProductId !== SPIKE_RT_SERIAL_PRODUCT_ID
+    ) {
       throw new Error(
-        "DFUモードのHubです。書き込み後にSPIKE-RTを起動してからデバッグ接続してください。",
+        `SPIKE-RT USBシリアルではありません (PID=${formatUsbId(usbProductId)})。`,
       );
     }
 
@@ -134,7 +137,12 @@ export async function connectSpikeSerial(callbacks = {}) {
   }
 
   const port = await navigator.serial.requestPort({
-    filters: [{ usbVendorId: LEGO_USB_VENDOR_ID }],
+    filters: [
+      {
+        usbVendorId: SPIKE_RT_SERIAL_VENDOR_ID,
+        usbProductId: SPIKE_RT_SERIAL_PRODUCT_ID,
+      },
+    ],
   });
 
   const connection = new SpikeSerialConnection(port, callbacks);
