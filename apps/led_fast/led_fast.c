@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MIT
  *
  * Derived from the SPIKE-RT v0.2.0 LED sample.
+ *
  */
 
 #include <kernel.h>
