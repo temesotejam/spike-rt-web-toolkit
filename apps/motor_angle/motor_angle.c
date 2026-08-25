@@ -72,7 +72,7 @@ static void draw_angle_dials(int32_t angle_c_deg, int32_t angle_d_deg)
   hub_display_pixel(dial_rows[index_d], dial_cols[index_d], DIAL_BRIGHTNESS_D);
 }
 
-static bool wait_for_two_motors(pup_motor_t **motor_c, pup_motor_t **motor_d)
+static void wait_for_two_motors(pup_motor_t **motor_c, pup_motor_t **motor_d)
 {
   bool announced_c = false;
   bool announced_d = false;
@@ -109,8 +109,6 @@ static bool wait_for_two_motors(pup_motor_t **motor_c, pup_motor_t **motor_d)
     }
     dly_tsk(500000U);
   }
-
-  return true;
 }
 
 static bool setup_motor_encoder(pup_motor_t *motor, char port_name)
@@ -209,9 +207,9 @@ void main_task(intptr_t exinf)
     serial_sample++;
     if (serial_sample >= SERIAL_EVERY_SAMPLES) {
       serial_sample = 0;
-      syslog(LOG_NOTICE,
-             "C ANGLE:%d TURN:%d SPEED:%d | D ANGLE:%d TURN:%d SPEED:%d",
-             (int)angle_c_deg, (int)turn_c_deg, (int)speed_c_dps,
+      syslog(LOG_NOTICE, "C ANGLE:%d TURN:%d SPEED:%d",
+             (int)angle_c_deg, (int)turn_c_deg, (int)speed_c_dps);
+      syslog(LOG_NOTICE, "D ANGLE:%d TURN:%d SPEED:%d",
              (int)angle_d_deg, (int)turn_d_deg, (int)speed_d_dps);
 
       if ((buttons & HUB_BUTTON_CENTER) == 0) {
