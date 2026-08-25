@@ -1,0 +1,7 @@
+{
+  "id": "dodge_game",
+  "name": "Dodge Game",
+  "description": "左右ボタンで自機を動かし、5x5ディスプレイを上から落ちてくる障害物から避け続けるミニゲームです。中央ボタンで開始・リスタートします。",
+  "warning": "",
+  "origin": "spike-rt-web-toolkit original sample"
+}
