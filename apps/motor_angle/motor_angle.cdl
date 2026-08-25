@@ -1,0 +1,113 @@
+/*
+ *    サンプルプログラム(1)のコンポーネント記述ファイル
+ *
+ *  $Id: sample1.cdl 839 2017-10-17 02:48:52Z ertl-hiro $
+ */
+/*
+ *  カーネルオブジェクトの定義
+ */
+import(<kernel.cdl>);
+
+/*
+ *  ターゲット非依存のセルタイプの定義
+ */
+import("syssvc/tSerialPort.cdl");
+import("syssvc/tSerialAdapter.cdl");
+import("syssvc/tSysLog.cdl");
+import("syssvc/tSysLogAdapter.cdl");
+import("syssvc/tLogTask.cdl");
+import("syssvc/tBanner.cdl");
+
+/*
+ *  ターゲット依存部の取り込み
+ */
+import("target.cdl");
+
+import("serial/tSIOAsyncPortTest.cdl");
+
+/*
+ *  「セルの組上げ記述」とは，"cell"で始まる行から，それに対応する"};"
+ *  の行までのことを言う．
+ */
+
+/*
+ *    システムログ機能のアダプタの組上げ記述
+ */
+cell tSysLogAdapter SysLogAdapter {
+  cSysLog = SysLog.eSysLog;
+};
+
+/*
+ *    シリアルインタフェースドライバのアダプタの組上げ記述
+ */
+cell tSerialAdapter SerialAdapter {
+  cSerialPort[0] = SerialPortUSB1.eSerialPort;
+  cSerialPort[1] = SerialPortBluetooth1.eSerialPort;
+  cSerialPort[2] = SerialPortTest1.eSerialPort;
+  cSerialPort[3] = SerialPortUART_F.eSerialPort;
+  //cSerialPort[4] = SerialPortUART_E.eSerialPort;
+};
+
+/*
+ *    システムログ機能の組上げ記述
+ */
+cell tSysLog SysLog {
+  logBufferSize = 32;
+  initLogMask = C_EXP("LOG_UPTO(LOG_NOTICE)");
+  initLowMask = C_EXP("LOG_UPTO(LOG_WARNING)");
+  cPutLog = PutLogTarget.ePutLog;
+};
+
+/*
+ *    シリアルインタフェースドライバの組上げ記述
+ */
+cell tSerialPort SerialPortUART_F {
+  receiveBufferSize = 256;
+  sendBufferSize    = 256;
+  cSIOPort = SIOPortTarget1.eSIOPort;
+  eiSIOCBR <= SIOPortTarget1.ciSIOCBR;
+};
+
+cell tSerialAsyncPort SerialPortUSB1 {
+  receiveBufferSize = 256;
+  sendBufferSize    = 256;
+  cSIOPort = SIOPortPybricksUSB1.eSIOPort;
+  eSIOCBR <= SIOPortPybricksUSB1.cSIOCBR;
+};
+
+cell tSerialAsyncPort SerialPortBluetooth1 {
+  receiveBufferSize = 256;
+  sendBufferSize    = 256;
+  cSIOPort = SIOPortPybricksBluetooth1.eSIOPort;
+  eSIOCBR <= SIOPortPybricksBluetooth1.cSIOCBR;
+};
+
+cell tSIOAsyncPortTest SIOPortTest1 {
+};
+
+cell tSerialAsyncPort SerialPortTest1 {
+  receiveBufferSize = 10;
+  sendBufferSize    = 10;
+  cSIOPort = SIOPortTest1.eSIOPort;
+  eSIOCBR <= SIOPortTest1.cSIOCBR;
+};
+
+/*
+ *    システムログタスクの組上げ記述
+ */
+cell tLogTask LogTask {
+  priority  = 4;
+  stackSize = LogTaskStackSize;
+  cSerialPort        = SerialPortUSB1.eSerialPort;
+  cnSerialPortManage = SerialPortUSB1.enSerialPortManage;
+  cSysLog = SysLog.eSysLog;
+  cPutLog = PutLogTarget.ePutLog;
+};
+
+/*
+ *    カーネル起動メッセージ出力の組上げ記述
+ */
+cell tBanner Banner {
+  targetName      = BannerTargetName;
+  copyrightNotice = BannerCopyrightNotice;
+};
