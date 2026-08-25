@@ -75,7 +75,7 @@ static pup_motor_t *wait_for_motor(void)
     }
 
     hub_light_on_color(PBIO_COLOR_YELLOW);
-    hub_display_char('A');
+    hub_display_char('C');
     dly_tsk(500000U);
   }
 
