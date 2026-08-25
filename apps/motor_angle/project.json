@@ -1,7 +1,7 @@
 {
   "id": "motor_angle",
-  "name": "Motor Angle Viewer",
-  "description": "ポートAのモータ内蔵エンコーダ角度を読み取り、5x5 LEDにダイヤル表示し、Web Serialへ累積角度・1回転内角度・回転速度を出力します。中央ボタンで現在位置を0度にリセットできます。",
-  "warning": "モータはポートAに接続してください。アプリ自身はモータを駆動せず、手で回して角度を確認します。",
+  "name": "Dual Motor Angle Viewer",
+  "description": "ポートCとDの2つのモータ内蔵エンコーダ角度を同時に読み取り、5x5 LEDへ2つのダイヤル位置を表示し、Web Serialへ各モータの累積角度・1回転内角度・回転速度を出力します。中央ボタンでC/D両方を0度にリセットできます。",
+  "warning": "モータをポートCとDの両方に接続してください。アプリ自身はモータを駆動せず、手で回して角度を確認します。5x5表示ではCが明るい点、Dが暗い点です。",
   "origin": "SPIKE-RT v0.2.0 motor encoder API"
 }
