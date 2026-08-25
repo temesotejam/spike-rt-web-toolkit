@@ -11,7 +11,7 @@
 #include "spike/hub/system.h"
 #include "spike/pup/motor.h"
 
-#define MOTOR_PORT              PBIO_PORT_ID_A
+#define MOTOR_PORT              PBIO_PORT_ID_C
 #define SAMPLE_INTERVAL_US      50000U
 #define SERIAL_EVERY_SAMPLES    4U
 
