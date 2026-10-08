@@ -4,10 +4,12 @@ on:
   push:
     branches:
       - main
+      - feature/build-pd-practice-zip
     paths:
       - "apps/**"
       - "web/**"
       - ".github/workflows/build-and-deploy.yml"
+      - ".github/scripts/**"
       - "README.md"
   workflow_dispatch:
 
@@ -53,6 +55,10 @@ jobs:
           set -euxo pipefail
           git -C spike-rt remote set-url --push origin DISABLED
           git -C spike-rt remote -v
+
+      - name: Import zipped applications
+        shell: bash
+        run: python3 .github/scripts/import-zipped-apps.py
 
       - name: Validate and copy applications
         shell: bash
@@ -129,6 +135,19 @@ jobs:
           sed -i \
             's/curl make libncurses5 python3 git/curl bzip2 make libncurses5 python3 git/' \
             "${DOCKERFILE}"
+          # Repair retired Bullseye apt mirrors inside the Docker build.
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("spike-rt/tools/docker/slim.dockerfile")
+          s = path.read_text()
+          original = "RUN apt update"
+          assert original in s
+          pre = ("RUN sed -i -e 's|deb.debian.org/debian-security|archive.debian.org/debian-security|g' "
+                 "-e 's|deb.debian.org/debian|archive.debian.org/debian|g' /etc/apt/sources.list "
+                 "&& rm -rf /var/lib/apt/lists/* "
+                 "&& apt-get update -o Acquire::Check-Valid-Until=false")
+          path.write_text(s.replace(original, pre, 1))
+          PY
 
           grep -q "curl bzip2 make libncurses5 python3 git" "${DOCKERFILE}"
           grep -n "apt install" -A4 "${DOCKERFILE}"
@@ -175,11 +194,12 @@ jobs:
 
               mkdir -p build/app-logs
 
+              failed_apps=()
               while IFS= read -r APP; do
                 test -n "${APP}"
                 echo "=== Build application: ${APP} ==="
 
-                (
+                if (
                   set -euxo pipefail
                   BUILD_DIR="build/obj-primehub_${APP}"
                   rm -rf "${BUILD_DIR}"
@@ -199,8 +219,15 @@ jobs:
                   test -s asp.bin
                   sha256sum asp.bin > asp.bin.sha256
                   arm-none-eabi-size asp > size.txt
-                ) 2>&1 | tee "build/app-logs/${APP}.log"
+                ) 2>&1 | tee "build/app-logs/${APP}.log"; then
+                  echo "BUILD OK: ${APP}"
+                else
+                  failed_apps+=("${APP}")
+                  echo "BUILD FAILED: ${APP}"
+                fi
               done < app-list.txt
+              printf "FAILED APPS: %s\\n" "${failed_apps[*]:-none}"
+              test "${#failed_apps[@]}" -eq 0
             ' 2>&1 | tee build.log
 
       - name: Upload diagnostic build logs
