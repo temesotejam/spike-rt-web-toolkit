@@ -135,10 +135,19 @@ jobs:
           sed -i \
             's/curl make libncurses5 python3 git/curl bzip2 make libncurses5 python3 git/' \
             "${DOCKERFILE}"
-          # Bullseye moved to Debian archive; use matching archive indexes.
-          sed -i 's@RUN apt update@RUN sed -i "s@deb.debian.org/debian-security@archive.debian.org/debian-security@g; s@deb.debian.org/debian@archive.debian.org/debian@g" /etc/apt/sources.list \&\& apt update@' "${DOCKERFILE}"
-          sed -i 's/RUN apt update/RUN rm -rf \/var\/lib\/apt\/lists\/* \&\& apt-get update -o Acquire::Check-Valid-Until=false/' "${DOCKERFILE}"
-
+          # Repair retired Bullseye apt mirrors inside the Docker build.
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("spike-rt/tools/docker/slim.dockerfile")
+          s = path.read_text()
+          original = "RUN apt update"
+          assert original in s
+          pre = ("RUN sed -i -e 's|deb.debian.org/debian-security|archive.debian.org/debian-security|g' "
+                 "-e 's|deb.debian.org/debian|archive.debian.org/debian|g' /etc/apt/sources.list "
+                 "&& rm -rf /var/lib/apt/lists/* "
+                 "&& apt-get update -o Acquire::Check-Valid-Until=false")
+          path.write_text(s.replace(original, pre, 1))
+          PY
 
           grep -q "curl bzip2 make libncurses5 python3 git" "${DOCKERFILE}"
           grep -n "apt install" -A4 "${DOCKERFILE}"
