@@ -8,6 +8,7 @@ on:
       - "apps/**"
       - "web/**"
       - ".github/workflows/build-and-deploy.yml"
+      - ".github/scripts/**"
       - "README.md"
   workflow_dispatch:
 
@@ -53,6 +54,10 @@ jobs:
           set -euxo pipefail
           git -C spike-rt remote set-url --push origin DISABLED
           git -C spike-rt remote -v
+
+      - name: Import zipped applications
+        shell: bash
+        run: python3 .github/scripts/import-zipped-apps.py
 
       - name: Validate and copy applications
         shell: bash
