@@ -135,6 +135,8 @@ jobs:
           sed -i \
             's/curl make libncurses5 python3 git/curl bzip2 make libncurses5 python3 git/' \
             "${DOCKERFILE}"
+          # Debian Bullseye mirror may serve stale cached package indexes.
+          sed -i 's/RUN apt update/RUN rm -rf \/var\/lib\/apt\/lists\/* \&\& apt-get update -o Acquire::http::No-Cache=true/' "${DOCKERFILE}"
 
           grep -q "curl bzip2 make libncurses5 python3 git" "${DOCKERFILE}"
           grep -n "apt install" -A4 "${DOCKERFILE}"
