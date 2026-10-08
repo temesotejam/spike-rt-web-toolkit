@@ -36,7 +36,7 @@ void Main(intptr_t exinf)
     }
 
     // センサーが押されたらメッセージを表示
-    hub_display_text("Pressed!", 200, 200);　// x=200, y=200 は表示位置
+    hub_display_text("Pressed!", 200, 200); // x=200, y=200 は表示位置
 
     // プログラムを終了
     exit(0);
