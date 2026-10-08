@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - feature/build-pd-practice-zip
     paths:
       - "apps/**"
       - "web/**"
