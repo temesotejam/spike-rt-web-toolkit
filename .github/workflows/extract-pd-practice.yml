@@ -1,0 +1,49 @@
+name: Extract PD practice ZIP into editable sources
+
+on:
+  push:
+    branches: [feature/build-pd-practice-zip]
+    paths:
+      - '.github/workflows/extract-pd-practice.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Inspect archive and extract editable project
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          archive = Path('apps/pd_practice-master.zip')
+          output = Path('apps/pd_practice_source')
+          output.mkdir(exist_ok=True)
+          with ZipFile(archive) as z:
+              for entry in z.infolist():
+                  p = Path(entry.filename)
+                  if p.is_absolute() or '..' in p.parts or (entry.external_attr >> 16) & 0o170000 == 0o120000:
+                      raise SystemExit(f'Unsafe zip member: {entry.filename}')
+              z.extractall(output)
+          print('Archive files:')
+          for p in sorted(output.rglob('*')):
+              if p.is_file():
+                  print(p, p.stat().st_size)
+          PY
+      - name: Commit extracted files to development branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/pd_practice_source
+          if ! git diff --cached --quiet; then
+            git commit -m "Extract PD practice project sources for editing"
+            git push origin HEAD:feature/build-pd-practice-zip
+          fi
