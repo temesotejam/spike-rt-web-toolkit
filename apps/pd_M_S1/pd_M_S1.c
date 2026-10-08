@@ -14,7 +14,8 @@ void Main(intptr_t exinf)
 
     // Aポートのモータを初期化
     // 第2引数：回転方向（PUP_DIRECTION_CLOCKWISE または COUNTERCLOCKWISE）
-    pup_motor_t *motorA = pup_motor_setup(PBIO_PORT_ID_A, PUP_DIRECTION_COUNTERCLOCKWISE);
+    pup_motor_t *motorA = pup_motor_get_device(PBIO_PORT_ID_A);
+    pup_motor_setup(motorA, PUP_DIRECTION_COUNTERCLOCKWISE, true);
 
     // ──────────────────────────────
     // モータを一定速度で回転させるループ
