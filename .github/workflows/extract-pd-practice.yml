@@ -28,7 +28,7 @@ jobs:
           base = Path("apps/pd_practice_source/pd_practice-master/sample_program")
           assert base.is_dir(), "ZIP content not extracted"
           count = 0
-          for sample in sorted(base.iterdir()):
+          for sample in sorted(list(base.iterdir()) + [base.parent / 'template']):
               if not sample.is_dir():
                   continue
               app = "pd_" + sample.name
