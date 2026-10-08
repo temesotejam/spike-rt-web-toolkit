@@ -194,11 +194,12 @@ jobs:
 
               mkdir -p build/app-logs
 
+              failed_apps=()
               while IFS= read -r APP; do
                 test -n "${APP}"
                 echo "=== Build application: ${APP} ==="
 
-                (
+                if (
                   set -euxo pipefail
                   BUILD_DIR="build/obj-primehub_${APP}"
                   rm -rf "${BUILD_DIR}"
@@ -218,8 +219,15 @@ jobs:
                   test -s asp.bin
                   sha256sum asp.bin > asp.bin.sha256
                   arm-none-eabi-size asp > size.txt
-                ) 2>&1 | tee "build/app-logs/${APP}.log"
+                ) 2>&1 | tee "build/app-logs/${APP}.log"; then
+                  echo "BUILD OK: ${APP}"
+                else
+                  failed_apps+=("${APP}")
+                  echo "BUILD FAILED: ${APP}"
+                fi
               done < app-list.txt
+              printf "FAILED APPS: %s\\n" "${failed_apps[*]:-none}"
+              test "${#failed_apps[@]}" -eq 0
             ' 2>&1 | tee build.log
 
       - name: Upload diagnostic build logs
