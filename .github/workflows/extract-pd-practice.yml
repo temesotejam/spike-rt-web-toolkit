@@ -1,4 +1,4 @@
-name: Extract PD practice ZIP into editable sources
+name: Convert PD practice samples into editable SPIKE-RT applications
 
 on:
   push:
@@ -11,39 +11,66 @@ permissions:
   contents: write
 
 jobs:
-  extract:
+  import:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: true
-      - name: Inspect archive and extract editable project
+      - name: Convert 26 samples to independent app directories
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          from zipfile import ZipFile
-          archive = Path('apps/pd_practice-master.zip')
-          output = Path('apps/pd_practice_source')
-          output.mkdir(exist_ok=True)
-          with ZipFile(archive) as z:
-              for entry in z.infolist():
-                  p = Path(entry.filename)
-                  if p.is_absolute() or '..' in p.parts or (entry.external_attr >> 16) & 0o170000 == 0o120000:
-                      raise SystemExit(f'Unsafe zip member: {entry.filename}')
-              z.extractall(output)
-          print('Archive files:')
-          for p in sorted(output.rglob('*')):
-              if p.is_file():
-                  print(p, p.stat().st_size)
+          import shutil
+          import re
+          base = Path("apps/pd_practice_source/pd_practice-master/sample_program")
+          assert base.is_dir(), "ZIP content not extracted"
+          count = 0
+          for sample in sorted(base.iterdir()):
+              if not sample.is_dir():
+                  continue
+              app = "pd_" + sample.name
+              assert re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", app)
+              source = sample / (sample.name + ".c")
+              if not source.exists():
+                  raise SystemExit(f"Missing source: {source}")
+              target = Path("apps") / app
+              target.mkdir(exist_ok=True)
+              for extension in (".c", ".h", ".cfg", ".cdl"):
+                  src = sample / (sample.name + extension)
+                  if src.exists():
+                      shutil.copy2(src, target / (app + extension))
+              # Existing project configurations refer to original header names.
+              # Keep the old header name as well for compatibility.
+              old_header = sample / (sample.name + ".h")
+              if old_header.exists():
+                  shutil.copy2(old_header, target / old_header.name)
+              cfg = target / (app + ".cfg")
+              if cfg.exists():
+                  text = cfg.read_text(encoding="utf-8")
+                  text = text.replace('"' + sample.name + '.h"', '"' + app + '.h"')
+                  cfg.write_text(text, encoding="utf-8")
+              (target / "project.json").write_text(
+                  __import__("json").dumps({
+                      "name": "PD実践 - " + sample.name,
+                      "description": "PD実践サンプル " + sample.name,
+                      "origin": "pd_practice-master/sample_program/" + sample.name
+                  }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+              print(f"REGISTERED {app}")
+              count += 1
+          print(f"Registered {count} PD sample programs")
+          assert count == 26, f"Unexpected sample count: {count}"
           PY
-      - name: Commit extracted files to development branch
+          git rm -r -q apps/pd_practice_source
+          git rm -q apps/pd_practice-master.zip
+      - name: Commit editable applications
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add apps/pd_practice_source
+          git add apps/
           if ! git diff --cached --quiet; then
-            git commit -m "Extract PD practice project sources for editing"
+            git commit -m "Import 26 PD practice samples as editable SPIKE-RT applications"
             git push origin HEAD:feature/build-pd-practice-zip
           fi
