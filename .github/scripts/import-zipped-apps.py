@@ -56,8 +56,11 @@ for archive in sorted(apps.glob("*.zip")):
             if previous.exists() and previous != target:
                 if target.exists():
                     raise SystemExit(f"{archive}: {target} would be overwritten")
-                previous.rename(target)
-                if suffix in (".cfg", ".h"):
+                if suffix == ".h":
+                    shutil.copy2(previous, target)  # retain original include name
+                else:
+                    previous.rename(target)
+                if suffix == ".cfg":
                     contents = target.read_text(encoding="utf-8")
                     contents = contents.replace(source.stem + ".h", app_id + ".h")
                     target.write_text(contents, encoding="utf-8")
