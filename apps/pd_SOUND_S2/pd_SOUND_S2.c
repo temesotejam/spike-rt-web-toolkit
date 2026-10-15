@@ -11,9 +11,9 @@
 // ──────────────────────────────
 void play_sound() {
     // 音の長さ（単位：ミリ秒）
-    int32_t quarter = 250;
-    int32_t half    = 500;
-    int32_t full    = 1000;
+    int32_t quarter = 250;//9
+    int32_t half    = 500;//2
+    int32_t full    = 1000;//5
 
     // 音階を順番に鳴らす（ド・ソ・ファ・ミ・レ・ド など）
     hub_speaker_play_tone(NOTE_C4, full);    // ド
