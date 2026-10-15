@@ -132,8 +132,9 @@ jobs:
           set -euxo pipefail
           DOCKERFILE="spike-rt/tools/docker/slim.dockerfile"
 
+          # Install/update trusted CA roots before HTTPS toolchain downloads.
           sed -i \
-            's/curl make libncurses5 python3 git/curl bzip2 make libncurses5 python3 git/' \
+            's/curl make libncurses5 python3 git/curl ca-certificates bzip2 make libncurses5 python3 git/' \
             "${DOCKERFILE}"
           # Repair retired Bullseye apt mirrors inside the Docker build.
           python3 - <<'PY'
@@ -149,7 +150,7 @@ jobs:
           path.write_text(s.replace(original, pre, 1))
           PY
 
-          grep -q "curl bzip2 make libncurses5 python3 git" "${DOCKERFILE}"
+          grep -q "curl ca-certificates bzip2 make libncurses5 python3 git" "${DOCKERFILE}"
           grep -n "apt install" -A4 "${DOCKERFILE}"
 
       - name: Build pinned SPIKE-RT builder image
