@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: create-assignment-main
@@ -55,3 +56,10 @@ jobs:
           git diff --cached --quiet && { echo "No changes to commit"; exit 1; }
           git commit -m "feat(assignments): create $ASSIGNMENT_ID from sample"
           git push origin HEAD:main
+
+      # GITHUB_TOKENでのgit pushは他のpushワークフローを起動しないため、
+      # workflow_dispatchを明示的に呼び出す。
+      - name: Start firmware build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build-and-deploy.yml --ref main
