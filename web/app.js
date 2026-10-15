@@ -223,11 +223,21 @@ async function loadCatalog() {
 
     catalogApps = catalog.apps;
     elements.appSelect.replaceChildren();
-    for (const app of catalogApps) {
-      const option = document.createElement("option");
-      option.value = app.id;
-      option.textContent = `${app.name} (${app.id})`;
-      elements.appSelect.append(option);
+    const groups = [
+      { label: "サンプル・通常アプリ", apps: catalogApps.filter((app) => app.category !== "assignment") },
+      { label: "課題", apps: catalogApps.filter((app) => app.category === "assignment") },
+    ];
+    for (const group of groups) {
+      if (!group.apps.length) continue;
+      const optgroup = document.createElement("optgroup");
+      optgroup.label = group.label;
+      for (const app of group.apps) {
+        const option = document.createElement("option");
+        option.value = app.id;
+        option.textContent = `${app.name} (${app.id})`;
+        optgroup.append(option);
+      }
+      elements.appSelect.append(optgroup);
     }
 
     if (catalogApps.some((app) => app.id === catalog.defaultApp)) {

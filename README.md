@@ -68,6 +68,14 @@ apps/
 
 より細かいタスク設定やTECS構成が必要になった場合は、`<app>.h`、`<app>.cfg`、`<app>.cdl`をアプリフォルダへ置くことで自動生成内容を上書きできます。
 
+## 課題をサンプルから作る
+
+`apps/assignments/` に課題ごとのアプリを保管できます。サンプルと独立して編集・ビルドできます。
+
+[Actions → Create assignment from sample](https://github.com/temesotejam/spike-rt-web-toolkit/actions/workflows/create-assignment.yml) の **Run workflow** から、`sample_id`（例: `pd_multi_task1`）、`assignment_id`（例: `kadai_01`）、任意の `title` を指定してください。Cソースと付随するヘッダ・設定ファイルが新しい課題として複製されます。作成された課題を編集してコミットすると自動ビルドされ、Web画面のプログラム選択欄の「課題」グループから選択・書き込みできます。
+
+手順の詳細は [apps/assignments/README.md](apps/assignments/README.md) を参照してください。
+
 ## Windows 初回設定
 
 WindowsでDFUモードのHubをWebUSBから選択できない場合は、GitHub Pagesの「Windows 初回設定」から専用セットアップを取得します。

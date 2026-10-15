@@ -68,26 +68,32 @@ jobs:
           rm -rf "spike-rt/${SPIKE_RT_APPS_DIR}"
           mkdir -p "spike-rt/${SPIKE_RT_APPS_DIR}"
 
-          mapfile -t APPS < <(
-            find "${APPS_ROOT}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' |
-              LC_ALL=C sort
-          )
-          test "${#APPS[@]}" -gt 0
-
-          : > spike-rt/app-list.txt
-          for APP in "${APPS[@]}"; do
-            [[ "${APP}" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]]
-            test -f "${APPS_ROOT}/${APP}/${APP}.c"
-
-            # project.json is optional. When present, validate its JSON syntax.
-            if [[ -f "${APPS_ROOT}/${APP}/project.json" ]]; then
-              python3 -m json.tool "${APPS_ROOT}/${APP}/project.json" >/dev/null
+          # apps/直下のアプリと apps/assignments/内の課題を同列にビルド
+          mapfile -t APP_DIRS < <(
+            find "${APPS_ROOT}" -mindepth 1 -maxdepth 1 -type d ! -name assignments -print
+            if [[ -d "${APPS_ROOT}/assignments" ]]; then
+              find "${APPS_ROOT}/assignments" -mindepth 1 -maxdepth 1 -type d -print
             fi
-
+          )
+          test "${#APP_DIRS[@]}" -gt 0
+          : > spike-rt/app-list.txt
+          : > spike-rt/app-sources.tsv
+          declare -A SEEN_APPS=()
+          for APP_DIR in "${APP_DIRS[@]}"; do
+            APP="${APP_DIR##*/}"
+            [[ "${APP}" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]]
+            test -f "${APP_DIR}/${APP}.c"
+            if [[ -n "${SEEN_APPS[${APP}]:-}" ]]; then
+              echo "Duplicate application ID: ${APP}" >&2
+              exit 1
+            fi
+            SEEN_APPS["${APP}"]=1
+            if [[ -f "${APP_DIR}/project.json" ]]; then
+              python3 -m json.tool "${APP_DIR}/project.json" >/dev/null
+            fi
             TARGET_DIR="spike-rt/${SPIKE_RT_APPS_DIR}/${APP}"
             mkdir -p "${TARGET_DIR}"
-            cp -a "${APPS_ROOT}/${APP}/." "${TARGET_DIR}/"
-
+            cp -a "${APP_DIR}/." "${TARGET_DIR}/"
             # h/cfg/cdlはアプリ側で上書き可能。無ければ標準構成を生成する。
             if [[ ! -f "${TARGET_DIR}/${APP}.h" ]]; then
               HEADER_GUARD="$(printf '%s_H' "${APP}" |
@@ -121,6 +127,7 @@ jobs:
             fi
 
             printf '%s\n' "${APP}" >> spike-rt/app-list.txt
+            printf '%s\t%s\n' "${APP}" "${APP_DIR}" >> spike-rt/app-sources.tsv
           done
 
           echo "Applications:"
@@ -271,9 +278,15 @@ jobs:
               if line.strip()
           ]
 
+          app_sources = dict(
+              line.split("\t", 1)
+              for line in Path("spike-rt/app-sources.tsv").read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          )
           catalog_apps = []
           for app_id in app_ids:
-              metadata_path = apps_root / app_id / "project.json"
+              source_dir = Path(app_sources[app_id])
+              metadata_path = source_dir / "project.json"
               metadata = {}
               if metadata_path.is_file():
                   metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -310,7 +323,8 @@ jobs:
                   "size": size,
                   "sha256": sha256,
                   "sourceCommit": os.environ["GITHUB_SHA"],
-                  "sourcePath": f"apps/{app_id}",
+                  "sourcePath": source_dir.as_posix(),
+                  "category": "assignment" if source_dir.parent == apps_root / "assignments" else "sample",
                   "spikeRtCommit": os.environ["SPIKE_RT_REF"],
                   "runNumber": os.environ["GITHUB_RUN_NUMBER"],
                   "runId": os.environ["GITHUB_RUN_ID"],
@@ -330,6 +344,7 @@ jobs:
                       "description": manifest["description"],
                       "warning": manifest["warning"],
                       "origin": manifest["origin"],
+                      "category": manifest["category"],
                       "size": size,
                       "sha256": sha256,
                       "manifest": f"{app_id}/manifest.json",

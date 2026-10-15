@@ -1,0 +1,57 @@
+name: Create assignment from sample
+
+on:
+  workflow_dispatch:
+    inputs:
+      sample_id:
+        description: "コピーするサンプルのフォルダ名（例: pd_multi_task1）"
+        required: true
+        type: string
+      assignment_id:
+        description: "課題の新しいフォルダ名（例: kadai_01）"
+        required: true
+        type: string
+      title:
+        description: "画面に表示する課題名（省略可）"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: create-assignment-main
+  cancel-in-progress: false
+
+jobs:
+  create:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: true
+
+      - name: Copy sample files
+        env:
+          SAMPLE_ID: ${{ inputs.sample_id }}
+          ASSIGNMENT_ID: ${{ inputs.assignment_id }}
+          ASSIGNMENT_TITLE: ${{ inputs.title }}
+        run: |
+          python3 .github/scripts/create-assignment.py \
+            --sample "$SAMPLE_ID" \
+            --assignment "$ASSIGNMENT_ID" \
+            --title "$ASSIGNMENT_TITLE"
+
+      - name: Commit assignment
+        env:
+          ASSIGNMENT_ID: ${{ inputs.assignment_id }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "apps/assignments/$ASSIGNMENT_ID"
+          git diff --cached --quiet && { echo "No changes to commit"; exit 1; }
+          git commit -m "feat(assignments): create $ASSIGNMENT_ID from sample"
+          git push origin HEAD:main
