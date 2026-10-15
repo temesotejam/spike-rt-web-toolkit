@@ -35,6 +35,9 @@ jobs:
           ref: main
           persist-credentials: true
 
+      - name: Verify assignment copies
+        run: python3 .github/scripts/test-create-assignment.py
+
       - name: Copy sample files
         env:
           SAMPLE_ID: ${{ inputs.sample_id }}

@@ -60,6 +60,9 @@ jobs:
         shell: bash
         run: python3 .github/scripts/import-zipped-apps.py
 
+      - name: Verify assignment copies
+        run: python3 .github/scripts/test-create-assignment.py
+
       - name: Validate and copy applications
         shell: bash
         run: |
