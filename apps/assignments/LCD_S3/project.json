@@ -1,0 +1,6 @@
+{
+  "id": "LCD_S3",
+  "name": "レポート問題1 - LCD_S3",
+  "description": "LCD_S2を改造し、countが60になると「Game Over!」を表示して終了する",
+  "origin": "apps/pd_LCD_S2"
+}
