@@ -1,19 +1,23 @@
+// M_S5.c  モータサンプルプログラム5  2026-10-22 
 #include <kernel.h>              // RTOS（リアルタイムOS）の基本機能
 #include <stdlib.h>              // exit() を使うため
-#include <M_S5.h>
+#include <pd_M_S5.h>
 #include "spike/pup/motor.h"     // モータを使うためのヘッダ
 
 // ──────────────────────────────
-// Main関数（RTOSが最初に実行される） 
+// Main関数（RTOSが最初に実行される） 　
 // ──────────────────────────────
 void Main(intptr_t exinf)
 {
-    // AポートとBポートのモータを初期化
-    // Aは反時計回り、Bは時計回りを正方向に設定
+    // A, Bポートのモータを取得（変更１）
     pup_motor_t *motorA = pup_motor_get_device(PBIO_PORT_ID_A);
-    pup_motor_setup(motorA, PUP_DIRECTION_COUNTERCLOCKWISE, true);
-    pup_motor_t *motorB = pup_motor_get_device(PBIO_PORT_ID_B);
-    pup_motor_setup(motorB, PUP_DIRECTION_CLOCKWISE, true);
+    pup_motor_t *motorB = pup_motor_get_device(PBIO_PORT_ID_B);    
+    
+    // A, Bポートのモータを初期化（変更２）
+    // 第2引数：回転方向（PUP_DIRECTION_CLOCKWISE または COUNTERCLOCKWISE） 
+    // 第3引数：リセット。trueで角度を0にする。
+    pbio_error_t errA = pup_motor_setup(motorA, PUP_DIRECTION_COUNTERCLOCKWISE, true);
+    pbio_error_t errB = pup_motor_setup(motorB, PUP_DIRECTION_CLOCKWISE, true);
 
     // 1秒待ってからスタート
     dly_tsk(1000000);

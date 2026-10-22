@@ -1,7 +1,8 @@
+// M_S1.c  モータサンプルプログラム1  2026-10-22
 #include <kernel.h>              // RTOS（リアルタイムOS）の基本機能
 #include <stdlib.h>              // exit() を使うため
 #include <t_syslog.h>            // シリアルモニタにメッセージを出す
-#include <M_S1.h>
+#include <pd_M_S1.h>
 #include "spike/pup/motor.h"     // PUPモータを使うためのヘッダ
 
 // ──────────────────────────────
@@ -12,10 +13,13 @@ void Main(intptr_t exinf)
     // 起動メッセージをシリアルモニタに出力
     syslog(LOG_NOTICE, "Program started.");
 
-    // Aポートのモータを初期化
-    // 第2引数：回転方向（PUP_DIRECTION_CLOCKWISE または COUNTERCLOCKWISE）
+    // ポートのモータを取得（変更１）
     pup_motor_t *motorA = pup_motor_get_device(PBIO_PORT_ID_A);
-    pup_motor_setup(motorA, PUP_DIRECTION_COUNTERCLOCKWISE, true);
+    
+    // Aポートのモータを初期化（変更２）
+    // 第2引数：回転方向（PUP_DIRECTION_CLOCKWISE または COUNTERCLOCKWISE） 
+    // 第3引数：リセット。trueで角度を0にする。
+    pbio_error_t err = pup_motor_setup(motorA, PUP_DIRECTION_CLOCKWISE, true);
 
     // ──────────────────────────────
     // モータを一定速度で回転させるループ
