@@ -32,16 +32,23 @@ void play_sound(void)
     hub_speaker_play_tone(NOTE_D4, quarter);
     hub_speaker_play_tone(NOTE_C4, half);
 
-    // ソ・ソ・ファ・ファ・ミ・ミ・レ（2回）
-    for (int i = 0; i < 2; i++) {
-        hub_speaker_play_tone(NOTE_G4, quarter);
-        hub_speaker_play_tone(NOTE_G4, quarter);
-        hub_speaker_play_tone(NOTE_F4, quarter);
-        hub_speaker_play_tone(NOTE_F4, quarter);
-        hub_speaker_play_tone(NOTE_E4, quarter);
-        hub_speaker_play_tone(NOTE_E4, quarter);
-        hub_speaker_play_tone(NOTE_D4, half);
-    }
+    // ソ・ソ・ファ・ファ・ミ・ミ・レ（1回目）
+    hub_speaker_play_tone(NOTE_G4, quarter);
+    hub_speaker_play_tone(NOTE_G4, quarter);
+    hub_speaker_play_tone(NOTE_F4, quarter);
+    hub_speaker_play_tone(NOTE_F4, quarter);
+    hub_speaker_play_tone(NOTE_E4, quarter);
+    hub_speaker_play_tone(NOTE_E4, quarter);
+    hub_speaker_play_tone(NOTE_D4, half);
+
+    // ソ・ソ・ファ・ファ・ミ・ミ・レ（2回目）
+    hub_speaker_play_tone(NOTE_G4, quarter);
+    hub_speaker_play_tone(NOTE_G4, quarter);
+    hub_speaker_play_tone(NOTE_F4, quarter);
+    hub_speaker_play_tone(NOTE_F4, quarter);
+    hub_speaker_play_tone(NOTE_E4, quarter);
+    hub_speaker_play_tone(NOTE_E4, quarter);
+    hub_speaker_play_tone(NOTE_D4, half);
 
     // 最初のメロディをもう一度
     hub_speaker_play_tone(NOTE_C4, quarter);
