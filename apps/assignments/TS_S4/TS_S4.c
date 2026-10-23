@@ -55,17 +55,22 @@ static void update_pressed_display(unsigned int *elapsed_ms, unsigned int *index
     }
 }
 
-// true: 再生中の2回目の押下で中断、false: 最後まで演奏した。
-static bool play_sound(pup_device_t *force_sensor)
+// 再生は2回目の押下があるまで繰り返す（通常は戻らない）。
+static void play_sound(pup_device_t *force_sensor)
 {
     unsigned int display_elapsed_ms = 0;
     unsigned int display_index = 0;
     bool released_after_start = false;
+    unsigned int release_ticks = 0;
+    unsigned int press_ticks = 0;
 
     // 最初の押下で直ちに文字表示と演奏を開始する。
     hub_display_char('P');
 
-    for (unsigned int i = 0; i < sizeof(melody) / sizeof(melody[0]); i++) {
+    // 曲が終わったら止めずに先頭から繰り返す。
+    // 再生を終える条件は2回目の押下だけ。
+    while (1) {
+      for (unsigned int i = 0; i < sizeof(melody) / sizeof(melody[0]); i++) {
         // 再生時間を指定しないので、途中でもセンサを確認できる。
         // 次の音をそのまま開始し、音と音の間で明示的には停止しない。
         hub_speaker_play_tone(melody[i].note, SOUND_MANUAL_STOP);
@@ -76,23 +81,29 @@ static bool play_sound(pup_device_t *force_sensor)
             // 初回に押したままでも、2回目の押下と誤認しない。
             // 一度離した後、もう一度押した場合だけ停止する。
             bool pressed = pup_force_sensor_touched(force_sensor);
-            if (!pressed) {
-                released_after_start = true;
-            } else if (released_after_start) {
-                hub_speaker_stop();
-                hub_display_off();
-                return true;
+            if (!released_after_start) {
+                // 最初の押下を離したことを30ms連続で確認。
+                // 接点のチャタリングで誤って2回目と判定しないため。
+                release_ticks = pressed ? 0 : release_ticks + 1;
+                if (release_ticks >= 3) {
+                    released_after_start = true;
+                }
+            } else {
+                // 離した後の押下を20ms連続で確認したら停止。
+                press_ticks = pressed ? press_ticks + 1 : 0;
+                if (press_ticks >= 2) {
+                    hub_speaker_stop();
+                    hub_display_off();
+                    return;
+                }
             }
 
             // 10msの待機中も、スピーカーはハードウェア側で鳴り続ける。
             dly_tsk(CHECK_INTERVAL_MS * 1000);
             update_pressed_display(&display_elapsed_ms, &display_index);
         }
+      }
     }
-
-    hub_speaker_stop();
-    hub_display_off();
-    return false;
 }
 
 void Main(intptr_t exinf)
@@ -116,12 +127,7 @@ void Main(intptr_t exinf)
     syslog(LOG_NOTICE, "Force sensor pressed. Starting playback.");
 
     // マルチタスクや割り込み処理を追加せず、単一タスクで動作する。
-    bool cancelled = play_sound(force_sensor);
-
-    if (cancelled) {
-        syslog(LOG_NOTICE, "Playback stopped by second press.");
-    } else {
-        syslog(LOG_NOTICE, "Playback completed.");
-    }
+    play_sound(force_sensor);
+    syslog(LOG_NOTICE, "Playback stopped by second press.");
     exit(0);
 }
