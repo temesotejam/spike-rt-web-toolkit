@@ -8,10 +8,8 @@
 #include "spike/hub/speaker.h"      // スピーカー
 #include "spike/pup/forcesensor.h"  // フォースセンサ
 
-// 1つのタスクだけで、演奏・表示・ボタン確認を順番に短時間ずつ実行する。
+// マルチタスクを使わずに、曲を鳴らしながら10ms間隔で押下を確認する。
 #define CHECK_INTERVAL_MS 10
-#define CHAR_ON_MS        200
-#define CHAR_OFF_MS       100
 
 typedef struct {
     uint16_t note;         // 音階（周波数）
@@ -31,41 +29,12 @@ static const melody_note_t melody[] = {
     { NOTE_D5, 600 }
 };
 
-// 文字表示はhub_display_text()を使わず、1文字ずつ更新する。
-// hub_display_text()は表示完了まで戻らず、ボタンを確認できないため。
-static void update_pressed_display(unsigned int *elapsed_ms, unsigned int *index)
-{
-    const char message[] = "Pressed!";
-    const unsigned int length = sizeof(message) - 1;
-
-    if (*index >= length) return;
-
-    *elapsed_ms += CHECK_INTERVAL_MS;
-
-    if (*elapsed_ms == CHAR_ON_MS) {
-        hub_display_off();
-    }
-
-    if (*elapsed_ms >= CHAR_ON_MS + CHAR_OFF_MS) {
-        *elapsed_ms = 0;
-        (*index)++;
-        if (*index < length) {
-            hub_display_char(message[*index]);
-        }
-    }
-}
-
 // 再生は2回目の押下があるまで繰り返す（通常は戻らない）。
 static void play_sound(pup_device_t *force_sensor)
 {
-    unsigned int display_elapsed_ms = 0;
-    unsigned int display_index = 0;
     bool released_after_start = false;
     unsigned int release_ticks = 0;
     unsigned int press_ticks = 0;
-
-    // 最初の押下で直ちに文字表示と演奏を開始する。
-    hub_display_char('P');
 
     // 曲が終わったら止めずに先頭から繰り返す。
     // 再生を終える条件は2回目の押下だけ。
@@ -93,14 +62,12 @@ static void play_sound(pup_device_t *force_sensor)
                 press_ticks = pressed ? press_ticks + 1 : 0;
                 if (press_ticks >= 2) {
                     hub_speaker_stop();
-                    hub_display_off();
                     return;
                 }
             }
 
-            // 10msの待機中も、スピーカーはハードウェア側で鳴り続ける。
+            // 音を鳴らしたまま待機し、10msごとにボタンを確認する。
             dly_tsk(CHECK_INTERVAL_MS * 1000);
-            update_pressed_display(&display_elapsed_ms, &display_index);
         }
       }
     }
@@ -117,6 +84,8 @@ void Main(intptr_t exinf)
         exit(1);
     }
 
+    // 演奏中はLCDを表示しない。
+    hub_display_off();
     hub_speaker_set_volume(70);
 
     // 1回目の押下を10ms間隔で確認する。
@@ -129,5 +98,9 @@ void Main(intptr_t exinf)
     // マルチタスクや割り込み処理を追加せず、単一タスクで動作する。
     play_sound(force_sensor);
     syslog(LOG_NOTICE, "Playback stopped by second press.");
+
+    // 2回目の押下で音を停止した後にだけ「Pressed!」を表示する。
+    // hub_display_text()は表示終了まで待機するが、既に音を止めているため問題ない。
+    hub_display_text("Pressed!", 200, 100);
     exit(0);
 }
