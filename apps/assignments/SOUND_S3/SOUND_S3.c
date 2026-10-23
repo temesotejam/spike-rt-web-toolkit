@@ -65,8 +65,8 @@ void Main(intptr_t exinf)
 {
     syslog(LOG_NOTICE, "SOUND_S3 started.");
 
-    // SOUND_S2と同じく、スピーカー音量を設定する。
-    hub_speaker_set_volume(70);
+    // 教室で複数台が鳴っても大きくならないよう、音量を5%に抑える。
+    hub_speaker_set_volume(5);
 
     // ハブの画面には開始時の目印として「3」を表示する。
     hub_display_number(3);

@@ -86,7 +86,8 @@ void Main(intptr_t exinf)
 
     // 演奏中はLCDを表示しない。
     hub_display_off();
-    hub_speaker_set_volume(70);
+    // 課題用に音量を5%に抑える。
+    hub_speaker_set_volume(5);
 
     // 1回目の押下を10ms間隔で確認する。
     while (!pup_force_sensor_touched(force_sensor)) {
