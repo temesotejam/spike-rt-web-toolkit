@@ -52,7 +52,6 @@ void Main(intptr_t exinf)
 
     hub_button_t buttons = 0;
     int shape = 0;                // 0：円、1：正方形
-    int32_t startAngle;           // 動作を始めたときのモータ角度
     hub_speaker_set_volume(5);
 
     while (1) {
@@ -90,11 +89,11 @@ void Main(intptr_t exinf)
         if (shape == 0) {
             // 6-A. 円：左タイヤを300度/秒、右タイヤをそれより遅く回す。
             // 左タイヤが半径250mmの円を1周したら両方止める。
-            startAngle = pup_motor_get_count(motorA);
+            pup_motor_reset_count(motorA);  // 左タイヤの回転角度を0に戻す
             pup_motor_set_speed(motorA, 300);
             pup_motor_set_speed(motorE, innerSpeed);
 
-            while (pup_motor_get_count(motorA) - startAngle < circleAngle) {
+            while (pup_motor_get_count(motorA) < circleAngle) {
                 dly_tsk(10000); // 10msごとに回転角度を確認
             }
             pup_motor_brake(motorA);
@@ -104,11 +103,11 @@ void Main(intptr_t exinf)
             // 6-B. 正方形：500mm直進→90度右折を4回繰り返す。
             for (int side = 0; side < 4; side++) {
                 // 500mm直進する
-                startAngle = pup_motor_get_count(motorA);
+                pup_motor_reset_count(motorA);  // 左タイヤの角度を0に戻す
                 pup_motor_set_speed(motorA, 300);
                 pup_motor_set_speed(motorE, 300);
 
-                while (pup_motor_get_count(motorA) - startAngle < straightAngle) {
+                while (pup_motor_get_count(motorA) < straightAngle) {
                     dly_tsk(10000);
                 }
                 pup_motor_brake(motorA);
@@ -116,10 +115,10 @@ void Main(intptr_t exinf)
 
                 // 左タイヤを止めて、右タイヤだけ後退させて90度曲がる
                 dly_tsk(100000);
-                startAngle = pup_motor_get_count(motorE);
+                pup_motor_reset_count(motorE);  // 右タイヤの角度を0に戻す
                 pup_motor_set_speed(motorE, -220);
 
-                while (startAngle - pup_motor_get_count(motorE) < turnAngle) {
+                while (pup_motor_get_count(motorE) > -turnAngle) {
                     dly_tsk(10000);
                 }
                 pup_motor_brake(motorE);
