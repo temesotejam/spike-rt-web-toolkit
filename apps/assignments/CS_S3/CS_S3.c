@@ -14,98 +14,98 @@ void play_sound(pup_device_t *ColorSensor)
 
     // きらきら星：ド・ド・ソ・ソ・ラ・ラ・ソ
     hub_speaker_play_tone(NOTE_C4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_C4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_A4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_A4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_G4, half);
 
     // ファ・ファ・ミ・ミ・レ・レ・ド
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_D4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_D4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_C4, half);
 
     // ソ・ソ・ファ・ファ・ミ・ミ・レ（1回目）
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_D4, half);
 
     // ソ・ソ・ファ・ファ・ミ・ミ・レ（2回目）
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_D4, half);
 
     // 最初のメロディをもう一度
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_C4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_C4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_A4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_A4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_G4, half);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
 
     hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_D4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_D4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
     hub_speaker_play_tone(NOTE_C4, half);
-    if (pup_color_sensor_ambient(ColorSensor) < 5) return;
+    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
 }
 
 // ──────────────────────────────
@@ -123,14 +123,14 @@ void Main(intptr_t exinf)
     // 教室で使うため音量を5%にする。
     hub_speaker_set_volume(5);
 
-    // 環境光が5以上の間は、きらきら星を繰り返し演奏する。
-    // 5未満になったら現在の1音の終了後に止め、明るくなったら再開する。
+    // 環境光が5より大きい間は、きらきら星を繰り返し演奏する。
+    // 5以下になったら現在の1音の終了後に止め、6以上で再開する。
     while (1)
     {
         int32_t ambient = pup_color_sensor_ambient(ColorSensor);
         syslog(LOG_NOTICE, "Ambient: %ld", ambient);
 
-        if (ambient >= 5) {
+        if (ambient > 5) {
             play_sound(ColorSensor);
         } else {
             dly_tsk(100000);  // 暗い間は0.1秒ごとに確認
