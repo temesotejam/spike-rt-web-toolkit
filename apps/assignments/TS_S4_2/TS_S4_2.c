@@ -71,29 +71,20 @@ void Main(intptr_t exinf)
     // 最初に押していたボタンを一度離すまで、停止操作を受け付けない。
     bool released = false;
 
-    // メロディを繰り返し再生する。
+    // 1音を鳴らし終わるごとに、ボタンの状態を確認する。
+    // 音が長い場合はその音が終わるまで待つが、曲全体は待たない。
     while (1) {
         for (int i = 0; i < sizeof(melody) / sizeof(melody[0]); i++) {
-            // 同じ音が連続する場合だけ短く区切る。
-            if (i > 0 && melody[i].note == melody[i - 1].note) {
-                hub_speaker_stop();
-                dly_tsk(20000);
-            }
+            // 指定時間だけ音を鳴らす（元サンプルSOUND_S2と同じ使い方）。
+            hub_speaker_play_tone(melody[i].note, melody[i].duration_ms);
 
-            // 音を鳴らしたまま次の処理へ進む。
-            hub_speaker_play_tone(melody[i].note, SOUND_MANUAL_STOP);
-
-            // 50msごとにセンサーを確認する（マルチタスクなし）。
-            for (int ms = 0; ms < melody[i].duration_ms; ms += 50) {
-                if (!pup_force_sensor_touched(ForceSensor)) {
-                    released = true;
-                } else if (released) {
-                    // 2回目の押下で、曲の途中でもすぐに停止する。
-                    hub_speaker_stop();
-                    hub_display_text("Pressed!", 200, 100);
-                    exit(0);
-                }
-                dly_tsk(50000);
+            // 1回目の押下を離した後、次に押されていたら終了。
+            if (!pup_force_sensor_touched(ForceSensor)) {
+                released = true;
+            } else if (released) {
+                // 音は既に止まっているので、表示して終了するだけ。
+                hub_display_text("Pressed!", 200, 100);
+                exit(0);
             }
         }
     }
