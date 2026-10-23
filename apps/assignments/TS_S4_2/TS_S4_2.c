@@ -1,38 +1,26 @@
 #include <kernel.h>                // RTOS（リアルタイムOS）の基本機能
 #include <stdlib.h>                // exit() を使うため
+#include <stdbool.h>                // 押下状態を記録する
+#include <stdint.h>                 // uint16_t型
 #include <t_syslog.h>              // シリアルモニタにメッセージを出す
 #include <TS_S4_2.h>
 #include "spike/hub/display.h"     // ハブのLEDマトリクス表示
 #include "spike/pup/forcesensor.h" // フォースセンサー（押す強さを検出）
-#include "spike/hub/speaker.h"   // 音楽を鳴らす
+#include "spike/hub/speaker.h"     // 音楽を鳴らす
 
-// 音程と長さを順番に並べる（単位: ms）。
-// TS_S4と同じ100 BPMの短いスター・ウォーズのメロディ。
-static const struct {
-    uint16_t note;
-    int duration_ms;
-} melody[] = {
-    { NOTE_G4, 200 },
-    { NOTE_G4, 200 },
-    { NOTE_G4, 200 },
-    { NOTE_C5, 1200 },
-    { NOTE_G5, 1200 },
-    { NOTE_F5, 200 },
-    { NOTE_E5, 200 },
-    { NOTE_D5, 200 },
-    { NOTE_C6, 1200 },
-    { NOTE_G5, 600 },
-    { NOTE_F5, 200 },
-    { NOTE_E5, 200 },
-    { NOTE_D5, 200 },
-    { NOTE_C6, 1200 },
-    { NOTE_G5, 600 },
-    { NOTE_F5, 200 },
-    { NOTE_E5, 200 },
-    { NOTE_F5, 200 },
-    { NOTE_D5, 1200 },
-};
+// SOUND_S2と同じく、1音ずつ鳴らす。
+// 音が終わるたびにセンサを確認する（途中の音は止めない）。
+static bool play_note(pup_device_t *sensor, bool *released, uint16_t note, int duration_ms)
+{
+    hub_speaker_play_tone(note, duration_ms);
 
+    if (!pup_force_sensor_touched(sensor)) {
+        *released = true;   // 最初の押下を離した
+    } else if (*released) {
+        return true;        // 2回目の押下を確認した
+    }
+    return false;
+}
 
 // ──────────────────────────────
 // Main関数（RTOSが最初に実行する関数）
@@ -64,28 +52,45 @@ void Main(intptr_t exinf)
         dly_tsk(100000);  // 0.1秒待つ（CPUを休ませる）
     }
 
-    // 1回目の押下で再生開始。課題用の音量は5%。
+    // 1回目の押下で音楽を開始する。課題用の音量は5%。
     hub_display_off();
     hub_speaker_set_volume(5);
 
-    // 最初に押していたボタンを一度離すまで、停止操作を受け付けない。
+    // いったんボタンを離した後の押下を、終了操作とする。
     bool released = false;
 
-    // 1音を鳴らし終わるごとに、ボタンの状態を確認する。
-    // 音が長い場合はその音が終わるまで待つが、曲全体は待たない。
+    // SOUND_S2のように音を1つずつ記述し、各音の後でボタンを確認する。
+    // 途中で止めなければ、曲を最初から繰り返す。
     while (1) {
-        for (int i = 0; i < sizeof(melody) / sizeof(melody[0]); i++) {
-            // 指定時間だけ音を鳴らす（元サンプルSOUND_S2と同じ使い方）。
-            hub_speaker_play_tone(melody[i].note, melody[i].duration_ms);
+        if (play_note(ForceSensor, &released, NOTE_G4, 200)) break;
+        if (play_note(ForceSensor, &released, NOTE_G4, 200)) break;
+        if (play_note(ForceSensor, &released, NOTE_G4, 200)) break;
 
-            // 1回目の押下を離した後、次に押されていたら終了。
-            if (!pup_force_sensor_touched(ForceSensor)) {
-                released = true;
-            } else if (released) {
-                // 音は既に止まっているので、表示して終了するだけ。
-                hub_display_text("Pressed!", 200, 100);
-                exit(0);
-            }
-        }
+        if (play_note(ForceSensor, &released, NOTE_C5, 1200)) break;
+        if (play_note(ForceSensor, &released, NOTE_G5, 1200)) break;
+
+        if (play_note(ForceSensor, &released, NOTE_F5, 200)) break;
+        if (play_note(ForceSensor, &released, NOTE_E5, 200)) break;
+        if (play_note(ForceSensor, &released, NOTE_D5, 200)) break;
+
+        if (play_note(ForceSensor, &released, NOTE_C6, 1200)) break;
+        if (play_note(ForceSensor, &released, NOTE_G5, 600)) break;
+
+        if (play_note(ForceSensor, &released, NOTE_F5, 200)) break;
+        if (play_note(ForceSensor, &released, NOTE_E5, 200)) break;
+        if (play_note(ForceSensor, &released, NOTE_D5, 200)) break;
+
+        if (play_note(ForceSensor, &released, NOTE_C6, 1200)) break;
+        if (play_note(ForceSensor, &released, NOTE_G5, 600)) break;
+
+        if (play_note(ForceSensor, &released, NOTE_F5, 200)) break;
+        if (play_note(ForceSensor, &released, NOTE_E5, 200)) break;
+        if (play_note(ForceSensor, &released, NOTE_F5, 200)) break;
+
+        if (play_note(ForceSensor, &released, NOTE_D5, 1200)) break;
     }
+
+    // 2回目の押下を確認したときだけ、LCDに表示して終了する。
+    hub_display_text("Pressed!", 200, 100);
+    exit(0);
 }
