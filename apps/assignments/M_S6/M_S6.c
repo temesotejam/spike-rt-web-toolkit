@@ -53,7 +53,6 @@ void Main(intptr_t exinf)
     hub_button_t buttons = 0;
     int shape = 0;                // 0：円、1：正方形
     int32_t startAngle;           // 動作を始めたときのモータ角度
-    int ticks;                    // 安全のための待ち時間カウンタ
     hub_speaker_set_volume(5);
 
     while (1) {
@@ -95,11 +94,8 @@ void Main(intptr_t exinf)
             pup_motor_set_speed(motorA, 300);
             pup_motor_set_speed(motorE, innerSpeed);
 
-            for (ticks = 0; ticks < 2000; ticks++) {
-                if (pup_motor_get_count(motorA) - startAngle >= circleAngle) {
-                    break;
-                }
-                dly_tsk(10000); // 10msごとに角度を確認（最大20秒）
+            while (pup_motor_get_count(motorA) - startAngle < circleAngle) {
+                dly_tsk(10000); // 10msごとに回転角度を確認
             }
             pup_motor_brake(motorA);
             pup_motor_brake(motorE);
@@ -112,33 +108,21 @@ void Main(intptr_t exinf)
                 pup_motor_set_speed(motorA, 300);
                 pup_motor_set_speed(motorE, 300);
 
-                for (ticks = 0; ticks < 2000; ticks++) {
-                    if (pup_motor_get_count(motorA) - startAngle >= straightAngle) {
-                        break;
-                    }
+                while (pup_motor_get_count(motorA) - startAngle < straightAngle) {
                     dly_tsk(10000);
                 }
                 pup_motor_brake(motorA);
                 pup_motor_brake(motorE);
-                if (ticks == 2000) {
-                    exit(1); // 車輪が動かない場合は中止
-                }
 
                 // 左タイヤを止めて、右タイヤだけ後退させて90度曲がる
                 dly_tsk(100000);
                 startAngle = pup_motor_get_count(motorE);
                 pup_motor_set_speed(motorE, -220);
 
-                for (ticks = 0; ticks < 2000; ticks++) {
-                    if (startAngle - pup_motor_get_count(motorE) >= turnAngle) {
-                        break;
-                    }
+                while (startAngle - pup_motor_get_count(motorE) < turnAngle) {
                     dly_tsk(10000);
                 }
                 pup_motor_brake(motorE);
-                if (ticks == 2000) {
-                    exit(1);
-                }
                 dly_tsk(100000);
             }
         }
@@ -146,9 +130,5 @@ void Main(intptr_t exinf)
         // 7. 走行終了。選択画面へ戻り、何度でも試せる。
         pup_motor_brake(motorA);
         pup_motor_brake(motorE);
-        // 円の走行中に異常があった場合は停止して終了する。
-        if (shape == 0 && ticks == 2000) {
-            exit(1);
-        }
     }
 }
