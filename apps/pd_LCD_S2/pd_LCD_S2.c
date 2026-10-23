@@ -23,10 +23,7 @@ void Main(intptr_t exinf)
         hub_display_number(count);   // 数字をSPIKEハブの画面に表示
         dly_tsk(1000000);            // 1秒待つ（マイクロ秒単位）
         count++;                     // 数字を1増やす
-        if(count<=60) break;//##########レポート問題1
     }
-
-    hub_display_text("Game Over!", 200, 200);//##########レポート問題1
 
     // 実際にはここには来ません（無限ループのため）
     exit(0);
