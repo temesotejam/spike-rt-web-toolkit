@@ -29,15 +29,16 @@ void Main(intptr_t exinf)
 
     while (1)
     {
-        // 環境光が5以下なら音を鳴らさず待機する。
-        int32_t ambient = pup_color_sensor_ambient(ColorSensor);
-        if (ambient <= 5) {
-            dly_tsk(100000); // 0.1秒待ってもう一度確認
-            continue;
+        // 1音が終わるたびに環境光を確認する。
+        // 5以下になったら音を止め、その場で明るくなるまで待つ。
+        if (pup_color_sensor_ambient(ColorSensor) <= 5) {
+            hub_speaker_stop();
+            while (pup_color_sensor_ambient(ColorSensor) <= 5) {
+                dly_tsk(100000);  // 5以下の間は0.1秒ごとに確認
+            }
         }
 
-        // 環境光が6以上なら次の1音だけを鳴らす。
-        // 1音が終わるたびにwhileの先頭で環境光を確認する。
+        // 6以上に戻ったらnextNoteをそのまま使い、次の音から再開。
         switch (nextNote) {
             // きらきら星：ド・ド・ソ・ソ・ラ・ラ・ソ
             case 0: hub_speaker_play_tone(NOTE_C4, quarter); break;
