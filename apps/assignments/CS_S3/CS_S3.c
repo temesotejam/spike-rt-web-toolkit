@@ -5,109 +5,6 @@
 #include "spike/pup/colorsensor.h" // カラーセンサーを使う
 #include "spike/hub/speaker.h"     // スピーカーを使う
 
-// SOUND_S3と同じ「きらきら星」を演奏する。
-void play_sound(pup_device_t *ColorSensor)
-{
-    // 音の長さ（単位：ミリ秒）。テンポを変える場合はここを変更する。
-    const int32_t quarter = 300;
-    const int32_t half    = 600;
-
-    // きらきら星：ド・ド・ソ・ソ・ラ・ラ・ソ
-    hub_speaker_play_tone(NOTE_C4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_C4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_A4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_A4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_G4, half);
-
-    // ファ・ファ・ミ・ミ・レ・レ・ド
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_D4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_D4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_C4, half);
-
-    // ソ・ソ・ファ・ファ・ミ・ミ・レ（1回目）
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_D4, half);
-
-    // ソ・ソ・ファ・ファ・ミ・ミ・レ（2回目）
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_D4, half);
-
-    // 最初のメロディをもう一度
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_C4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_C4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_G4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_A4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_A4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_G4, half);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-
-    hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_F4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_E4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_D4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_D4, quarter);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-    hub_speaker_play_tone(NOTE_C4, half);
-    if (pup_color_sensor_ambient(ColorSensor) <= 5) return;
-}
-
 // ──────────────────────────────
 // Main関数（RTOSが最初に実行する関数）
 // ──────────────────────────────
@@ -117,23 +14,90 @@ void Main(intptr_t exinf)
     syslog(LOG_NOTICE, "Program started.");
 
     // Dポートに接続されたカラーセンサーを取得
-    // pup_device_t* はセンサーを操作するための変数
     pup_device_t *ColorSensor = pup_color_sensor_get_device(PBIO_PORT_ID_D);
 
-    // 教室で使うため音量を5%にする。
+    // SOUND_S3と同じきらきら星（音の長さはミリ秒）
+    const int32_t quarter = 300;
+    const int32_t half = 600;
+
+    // 次に鳴らす音の番号を記録する（0～41）。
+    // 暗くなっても番号を消さないので、続きを再生できる。
+    int nextNote = 0;
+
+    // 課題用に音量を5%に抑える。
     hub_speaker_set_volume(5);
 
-    // 環境光が5より大きい間は、きらきら星を繰り返し演奏する。
-    // 5以下になったら現在の1音の終了後に止め、6以上で再開する。
     while (1)
     {
+        // 環境光が5以下なら音を鳴らさず待機する。
         int32_t ambient = pup_color_sensor_ambient(ColorSensor);
-        syslog(LOG_NOTICE, "Ambient: %ld", ambient);
+        if (ambient <= 5) {
+            dly_tsk(100000); // 0.1秒待ってもう一度確認
+            continue;
+        }
 
-        if (ambient > 5) {
-            play_sound(ColorSensor);
-        } else {
-            dly_tsk(100000);  // 暗い間は0.1秒ごとに確認
+        // 環境光が6以上なら次の1音だけを鳴らす。
+        // 1音が終わるたびにwhileの先頭で環境光を確認する。
+        switch (nextNote) {
+            // きらきら星：ド・ド・ソ・ソ・ラ・ラ・ソ
+            case 0: hub_speaker_play_tone(NOTE_C4, quarter); break;
+            case 1: hub_speaker_play_tone(NOTE_C4, quarter); break;
+            case 2: hub_speaker_play_tone(NOTE_G4, quarter); break;
+            case 3: hub_speaker_play_tone(NOTE_G4, quarter); break;
+            case 4: hub_speaker_play_tone(NOTE_A4, quarter); break;
+            case 5: hub_speaker_play_tone(NOTE_A4, quarter); break;
+            case 6: hub_speaker_play_tone(NOTE_G4, half); break;
+
+            // ファ・ファ・ミ・ミ・レ・レ・ド
+            case 7: hub_speaker_play_tone(NOTE_F4, quarter); break;
+            case 8: hub_speaker_play_tone(NOTE_F4, quarter); break;
+            case 9: hub_speaker_play_tone(NOTE_E4, quarter); break;
+            case 10: hub_speaker_play_tone(NOTE_E4, quarter); break;
+            case 11: hub_speaker_play_tone(NOTE_D4, quarter); break;
+            case 12: hub_speaker_play_tone(NOTE_D4, quarter); break;
+            case 13: hub_speaker_play_tone(NOTE_C4, half); break;
+
+            // ソ・ソ・ファ・ファ・ミ・ミ・レ（1回目）
+            case 14: hub_speaker_play_tone(NOTE_G4, quarter); break;
+            case 15: hub_speaker_play_tone(NOTE_G4, quarter); break;
+            case 16: hub_speaker_play_tone(NOTE_F4, quarter); break;
+            case 17: hub_speaker_play_tone(NOTE_F4, quarter); break;
+            case 18: hub_speaker_play_tone(NOTE_E4, quarter); break;
+            case 19: hub_speaker_play_tone(NOTE_E4, quarter); break;
+            case 20: hub_speaker_play_tone(NOTE_D4, half); break;
+
+            // ソ・ソ・ファ・ファ・ミ・ミ・レ（2回目）
+            case 21: hub_speaker_play_tone(NOTE_G4, quarter); break;
+            case 22: hub_speaker_play_tone(NOTE_G4, quarter); break;
+            case 23: hub_speaker_play_tone(NOTE_F4, quarter); break;
+            case 24: hub_speaker_play_tone(NOTE_F4, quarter); break;
+            case 25: hub_speaker_play_tone(NOTE_E4, quarter); break;
+            case 26: hub_speaker_play_tone(NOTE_E4, quarter); break;
+            case 27: hub_speaker_play_tone(NOTE_D4, half); break;
+
+            // 最初のメロディをもう一度：ド・ド・ソ・ソ・ラ・ラ・ソ
+            case 28: hub_speaker_play_tone(NOTE_C4, quarter); break;
+            case 29: hub_speaker_play_tone(NOTE_C4, quarter); break;
+            case 30: hub_speaker_play_tone(NOTE_G4, quarter); break;
+            case 31: hub_speaker_play_tone(NOTE_G4, quarter); break;
+            case 32: hub_speaker_play_tone(NOTE_A4, quarter); break;
+            case 33: hub_speaker_play_tone(NOTE_A4, quarter); break;
+            case 34: hub_speaker_play_tone(NOTE_G4, half); break;
+
+            // ファ・ファ・ミ・ミ・レ・レ・ド
+            case 35: hub_speaker_play_tone(NOTE_F4, quarter); break;
+            case 36: hub_speaker_play_tone(NOTE_F4, quarter); break;
+            case 37: hub_speaker_play_tone(NOTE_E4, quarter); break;
+            case 38: hub_speaker_play_tone(NOTE_E4, quarter); break;
+            case 39: hub_speaker_play_tone(NOTE_D4, quarter); break;
+            case 40: hub_speaker_play_tone(NOTE_D4, quarter); break;
+            case 41: hub_speaker_play_tone(NOTE_C4, half); break;
+        }
+
+        // 次の音に進む。曲の最後まで演奏した場合だけ先頭へ戻る。
+        nextNote++;
+        if (nextNote >= 42) {
+            nextNote = 0;
         }
     }
 }
