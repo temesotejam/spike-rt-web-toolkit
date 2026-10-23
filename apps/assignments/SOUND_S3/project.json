@@ -1,0 +1,6 @@
+{
+  "id": "SOUND_S3",
+  "name": "レポート問題1 - SOUND_S3",
+  "description": "SOUND_S2を元に、好きな曲のメロディを作る課題（初期例：きらきら星）",
+  "origin": "apps/pd_SOUND_S2"
+}
