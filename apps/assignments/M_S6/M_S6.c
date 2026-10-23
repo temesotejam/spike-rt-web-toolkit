@@ -101,6 +101,10 @@ void Main(intptr_t exinf)
                 }
                 dly_tsk(10000); // 10msごとに回転角度を確認
             }
+            // ストール時はフリー停止。正常終了時だけブレーキ。
+            if (stalled) {
+                break;
+            }
             pup_motor_brake(motorA);
             pup_motor_brake(motorE);
 
@@ -119,11 +123,11 @@ void Main(intptr_t exinf)
                     }
                     dly_tsk(10000);
                 }
-                pup_motor_brake(motorA);
-                pup_motor_brake(motorE);
                 if (stalled) {
                     break;  // 以降の辺の走行を飛ばす
                 }
+                pup_motor_brake(motorA);
+                pup_motor_brake(motorE);
 
                 // 左タイヤを止めて、右タイヤだけ後退させて90度曲がる
                 dly_tsk(100000);
@@ -137,10 +141,10 @@ void Main(intptr_t exinf)
                     }
                     dly_tsk(10000);
                 }
-                pup_motor_brake(motorE);
                 if (stalled) {
                     break;  // 以降の辺の走行を飛ばす
                 }
+                pup_motor_brake(motorE);
                 dly_tsk(100000);
             }
         }
@@ -155,8 +159,8 @@ void Main(intptr_t exinf)
         pup_motor_brake(motorE);
     }
 
-    // 8. ストール時：両モータを停止して終了
-    pup_motor_brake(motorA);
-    pup_motor_brake(motorE);
+    // 8. ストール時：両モータをフリー停止して終了
+    pup_motor_stop(motorA);
+    pup_motor_stop(motorE);
     exit(1);
 }
