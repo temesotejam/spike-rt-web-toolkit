@@ -7,11 +7,12 @@
 #include "spike/pup/motor.h"
 
 // M_S5を元に、A/Bの2モータで円と正方形を走る課題。
-// A: 左車輪、B: 右車輪の想定。前進時は両方の角速度が正になる向きに初期化。
+// Advanced Driving Base Assembly準拠。A: 左車輪、E: 右車輪。
+// 前進時は両方の角速度が正になる向きに初期化。
 // 車体の組み方に応じて、車輪径・車輪中心間距離・回転方向を調整すること。
 #define PI                 3.14159265f
 #define WHEEL_DIAMETER_MM  88.0f   // 写真の大型タイヤ (88×14mm)
-#define WHEEL_TRACK_MM     120.0f  // 左右の車輪中心間距離の仮値。実測して変更する。
+#define WHEEL_TRACK_MM     144.0f  // ADBの文献記載値14.4cm。実機で測って微調整。
 #define CIRCLE_RADIUS_MM   250.0f  // 円の半径は外側の左タイヤの軌跡を基準とする
 #define SQUARE_SIDE_MM    500.0f  // 正方形の辺長も左タイヤの軌跡を基準とする
 #define MAX_SPEED_DPS      320     // モータ角速度(度/秒)
@@ -25,7 +26,7 @@ static int32_t mm_to_deg(float mm)
     return (int32_t)(mm * 360.0f / (PI * WHEEL_DIAMETER_MM) + 0.5f);
 }
 
-// 指定した角度だけA/Bを動かす。エンコーダ角を確認して停止する。
+// 指定した角度だけA/Eを動かす。エンコーダ角を確認して停止する。
 // 初回の回転角は現在値を基準にするので、何度でも順番に呼び出せる。
 static bool move_wheels(pup_motor_t *motorA, pup_motor_t *motorB,
                         int32_t degA, int32_t degB,
@@ -71,15 +72,15 @@ static bool move_wheels(pup_motor_t *motorA, pup_motor_t *motorB,
 
 void Main(intptr_t exinf)
 {
-    // M_S5と同様にモータAとBを取得する。
+    // Advanced Driving Baseの走行モータはA(左)、E(右)。
     pup_motor_t *motorA = pup_motor_get_device(PBIO_PORT_ID_A);
-    pup_motor_t *motorB = pup_motor_get_device(PBIO_PORT_ID_B);
+    pup_motor_t *motorB = pup_motor_get_device(PBIO_PORT_ID_E);
     if (motorA == NULL || motorB == NULL) {
-        syslog(LOG_ERROR, "Connect both motors to A and B.");
+        syslog(LOG_ERROR, "Connect drive motors to A (left) and E (right).");
         exit(1);
     }
 
-    // A=左・B=右の標準的な配置を想定する。
+    // A=左・E=右の公式Advanced Driving Base配置を想定する。
     // 実機で両輪が前進しなければ、回転方向を調整する。
     if (pup_motor_setup(motorA, PUP_DIRECTION_COUNTERCLOCKWISE, true) != PBIO_SUCCESS ||
         pup_motor_setup(motorB, PUP_DIRECTION_CLOCKWISE, true) != PBIO_SUCCESS) {
@@ -90,7 +91,7 @@ void Main(intptr_t exinf)
     }
 
     // 外側の左タイヤ(A)が半径250mmの円を右回りに1周する。
-    // 内側の右タイヤ(B)の半径 = 250mm - 左右の車輪中心間距離。
+    // 内側の右タイヤ(E)の半径 = 250mm - 左右の車輪中心間距離。
     float outerMM = 2.0f * PI * CIRCLE_RADIUS_MM;
     float innerMM = 2.0f * PI * (CIRCLE_RADIUS_MM - WHEEL_TRACK_MM);
     int32_t innerSpeed = (int32_t)(MAX_SPEED_DPS * innerMM / outerMM);
