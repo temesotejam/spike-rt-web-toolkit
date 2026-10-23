@@ -10,11 +10,10 @@
 // A: 左車輪、B: 右車輪の想定。前進時は両方の角速度が正になる向きに初期化。
 // 車体の組み方に応じて、車輪径・車輪中心間距離・回転方向を調整すること。
 #define PI                 3.14159265f
-#define WHEEL_DIAMETER_MM  56.0f   // SPIKE Prime基本セットの最大タイヤ(56mm)
-                                  // 拡張セットの88mmタイヤなら88.0fに変更
+#define WHEEL_DIAMETER_MM  88.0f   // 写真の大型タイヤ (88×14mm)
 #define WHEEL_TRACK_MM     120.0f  // 左右の車輪中心間距離の仮値。実測して変更する。
-#define CIRCLE_RADIUS_MM   250.0f
-#define SQUARE_SIDE_MM    500.0f
+#define CIRCLE_RADIUS_MM   250.0f  // 円の半径は外側の左タイヤの軌跡を基準とする
+#define SQUARE_SIDE_MM    500.0f  // 正方形の辺長も左タイヤの軌跡を基準とする
 #define MAX_SPEED_DPS      320     // モータ角速度(度/秒)
 #define TURN_SPEED_DPS     220
 #define POSITION_TOL_DEG   3       // 到達判定の許容角度
@@ -90,17 +89,17 @@ void Main(intptr_t exinf)
         exit(1);
     }
 
-    // 車体中心が半径250mmの円を右回りに1周する。
-    // 外側(左)のタイヤは内側(右)より長い距離を進む。
-    float outerMM = 2.0f * PI * (CIRCLE_RADIUS_MM + WHEEL_TRACK_MM / 2.0f);
-    float innerMM = 2.0f * PI * (CIRCLE_RADIUS_MM - WHEEL_TRACK_MM / 2.0f);
+    // 外側の左タイヤ(A)が半径250mmの円を右回りに1周する。
+    // 内側の右タイヤ(B)の半径 = 250mm - 左右の車輪中心間距離。
+    float outerMM = 2.0f * PI * CIRCLE_RADIUS_MM;
+    float innerMM = 2.0f * PI * (CIRCLE_RADIUS_MM - WHEEL_TRACK_MM);
     int32_t innerSpeed = (int32_t)(MAX_SPEED_DPS * innerMM / outerMM);
     if (innerMM <= 0.0f || innerSpeed < 90) {
         syslog(LOG_ERROR, "Invalid wheel track or circle radius.");
         exit(1);
     }
 
-    syslog(LOG_NOTICE, "M_S6: circle radius=250mm, then square side=500mm.");
+    syslog(LOG_NOTICE, "M_S6: LEFT wheel circle R=250mm, square side=500mm.");
     dly_tsk(2000000); // 安全のため、2秒後に走行開始
 
     syslog(LOG_NOTICE, "CIRCLE START");
@@ -113,19 +112,21 @@ void Main(intptr_t exinf)
     pup_motor_brake(motorB);
     dly_tsk(2000000); // 円と正方形の間は2秒停止
 
-    // 正方形：500mm直進 -> その場で右へ90°旋回、を4回繰り返す。
-    // 左右輪中心間距離をWとすると、90°旋回時の片輪移動距離は πW/4。
+    // 正方形：左タイヤを500mm直進させ、その左タイヤを軸に90°右旋回する。
+    // 右タイヤだけを後退させ、左タイヤは角で停止するため、
+    // 左タイヤの軌跡が1辺500mmの正方形になる。
+    // 90°旋回時の右タイヤ移動距離 = π × 左右車輪中心間距離 / 2。
     int32_t straightDeg = mm_to_deg(SQUARE_SIDE_MM);
-    int32_t turnDeg = mm_to_deg(PI * WHEEL_TRACK_MM / 4.0f);
+    int32_t turnDeg = mm_to_deg(PI * WHEEL_TRACK_MM / 2.0f);
     syslog(LOG_NOTICE, "SQUARE START");
     for (int side = 0; side < 4; side++) {
         if (!move_wheels(motorA, motorB, straightDeg, straightDeg,
                          MAX_SPEED_DPS, MAX_SPEED_DPS)) {
             exit(1);
         }
-        // その場で右旋回するため、左輪を正・右輪を負方向へ動かす。
-        if (!move_wheels(motorA, motorB, turnDeg, -turnDeg,
-                         TURN_SPEED_DPS, TURN_SPEED_DPS)) {
+        // 左タイヤをその角に止めたまま、右タイヤを後退させて右へ90°旋回。
+        if (!move_wheels(motorA, motorB, 0, -turnDeg,
+                         0, TURN_SPEED_DPS)) {
             exit(1);
         }
     }
