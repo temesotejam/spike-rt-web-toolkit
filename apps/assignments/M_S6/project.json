@@ -1,7 +1,7 @@
 {
   "id": "M_S6",
   "name": "レポート問題 - M_S6（円・正方形走行）",
-  "description": "LEGO Education Advanced Driving Base Assembly用。左走行モーターA、右走行モーターE、直径88mmタイヤで、外側の左車輪軌跡が半径0.25mの円と一辺0.5mの正方形になるよう走行。車輪中心間距離は参考文献の14.4cmを暫定採用。",
+  "description": "Advanced Driving Base Assembly用。左右ボタンで円（外側左車輪の半径0.25m）または正方形（外側左車輪の各辺0.5m）を切替え、5×5ドットで形状を表示。中央ボタンで確定、短い確認音の後に選択した軌跡を走り、終了後に選択画面に戻る。88mmタイヤ、A/Eモーター、車輪中心間距離144mm暫定。",
   "warning": "Advanced Driving Base Assemblyに合わせ、左走行モーターA・右走行モーターEを使用します。WHEEL_TRACK_MM=144mmは文献値のため、実機で車輪の接地点同士の横方向距離を測って補正してください。走行前に両輪が正方向で前進するか確認。床の摩擦・滑りによって軌跡はずれます。",
   "origin": "apps/pd_M_S5"
 }

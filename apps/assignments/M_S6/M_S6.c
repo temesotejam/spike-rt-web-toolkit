@@ -5,8 +5,11 @@
 #include <t_syslog.h>
 #include <M_S6.h>
 #include "spike/pup/motor.h"
+#include "spike/hub/button.h"     // 左右・中央ボタン
+#include "spike/hub/display.h"    // 5×5ドット表示
+#include "spike/hub/speaker.h"    // 確定音
 
-// M_S5を元に、A/Bの2モータで円と正方形を走る課題。
+// M_S5を元に、左右ボタンで円／正方形を選択して走る課題。
 // Advanced Driving Base Assembly準拠。A: 左車輪、E: 右車輪。
 // 前進時は両方の角速度が正になる向きに初期化。
 // 車体の組み方に応じて、車輪径・車輪中心間距離・回転方向を調整すること。
@@ -100,40 +103,97 @@ void Main(intptr_t exinf)
         exit(1);
     }
 
-    syslog(LOG_NOTICE, "M_S6: LEFT wheel circle R=250mm, square side=500mm.");
-    dly_tsk(2000000); // 安全のため、2秒後に走行開始
+    // 5×5ドットで、円と正方形の輪郭を表示する（0=消灯、100=点灯）。
+    uint8_t circleImage[25] = {
+          0, 100, 100, 100,   0,
+        100,   0,   0,   0, 100,
+        100,   0,   0,   0, 100,
+        100,   0,   0,   0, 100,
+          0, 100, 100, 100,   0
+    };
+    uint8_t squareImage[25] = {
+        100, 100, 100, 100, 100,
+        100,   0,   0,   0, 100,
+        100,   0,   0,   0, 100,
+        100,   0,   0,   0, 100,
+        100, 100, 100, 100, 100
+    };
 
-    syslog(LOG_NOTICE, "CIRCLE START");
-    if (!move_wheels(motorA, motorB,
-                     mm_to_deg(outerMM), mm_to_deg(innerMM),
-                     MAX_SPEED_DPS, innerSpeed)) {
-        exit(1);
-    }
-    pup_motor_brake(motorA);
-    pup_motor_brake(motorB);
-    dly_tsk(2000000); // 円と正方形の間は2秒停止
+    // 選択中は円が初期値。走行後も前回の選択を保持する。
+    bool squareSelected = false;
+    hub_button_t buttons = 0;
+    hub_button_t previousButtons = 0;
+    hub_speaker_set_volume(5);  // 教室で使うため、短い確認音は音量5%
 
-    // 正方形：左タイヤを500mm直進させ、その左タイヤを軸に90°右旋回する。
-    // 右タイヤだけを後退させ、左タイヤは角で停止するため、
-    // 左タイヤの軌跡が1辺500mmの正方形になる。
-    // 90°旋回時の右タイヤ移動距離 = π × 左右車輪中心間距離 / 2。
+    // 正方形の角度目標は車輪中心間距離から計算する。
     int32_t straightDeg = mm_to_deg(SQUARE_SIDE_MM);
     int32_t turnDeg = mm_to_deg(PI * WHEEL_TRACK_MM / 2.0f);
-    syslog(LOG_NOTICE, "SQUARE START");
-    for (int side = 0; side < 4; side++) {
-        if (!move_wheels(motorA, motorB, straightDeg, straightDeg,
-                         MAX_SPEED_DPS, MAX_SPEED_DPS)) {
-            exit(1);
-        }
-        // 左タイヤをその角に止めたまま、右タイヤを後退させて右へ90°旋回。
-        if (!move_wheels(motorA, motorB, 0, -turnDeg,
-                         0, TURN_SPEED_DPS)) {
-            exit(1);
-        }
-    }
 
-    pup_motor_brake(motorA);
-    pup_motor_brake(motorB);
-    syslog(LOG_NOTICE, "M_S6: completed circle and square.");
-    exit(0);
+    syslog(LOG_NOTICE, "M_S6: LEFT/RIGHT=change shape, CENTER=start.");
+
+    while (1) {
+        // 走行が終わったら安全に停止し、選択画面に戻る。
+        pup_motor_brake(motorA);
+        pup_motor_brake(motorB);
+
+        // 前回の中央ボタンが押されたままなら離すまで待つ。
+        hub_button_is_pressed(&buttons);
+        while (buttons & (HUB_BUTTON_LEFT | HUB_BUTTON_RIGHT | HUB_BUTTON_CENTER)) {
+            dly_tsk(20000);
+            hub_button_is_pressed(&buttons);
+        }
+        previousButtons = 0;
+        hub_display_image(squareSelected ? squareImage : circleImage);
+
+        // 左右ボタンのどちらかで切り替え、中央ボタンで確定。
+        while (1) {
+            hub_button_is_pressed(&buttons);
+
+            if (((buttons & HUB_BUTTON_LEFT) && !(previousButtons & HUB_BUTTON_LEFT)) ||
+                ((buttons & HUB_BUTTON_RIGHT) && !(previousButtons & HUB_BUTTON_RIGHT))) {
+                squareSelected = !squareSelected;
+                hub_display_image(squareSelected ? squareImage : circleImage);
+            }
+
+            if ((buttons & HUB_BUTTON_CENTER) && !(previousButtons & HUB_BUTTON_CENTER)) {
+                break;
+            }
+
+            previousButtons = buttons;
+            dly_tsk(20000);  // 20msごとにボタン確認
+        }
+
+        // 決定音を1回短く鳴らしてから、選んだ軌跡の走行を開始する。
+        hub_speaker_play_tone(NOTE_C5, 150);
+
+        if (!squareSelected) {
+            // 円：外側の左タイヤが半径250mmの円を1周する。
+            syslog(LOG_NOTICE, "CIRCLE START");
+            if (!move_wheels(motorA, motorB,
+                             mm_to_deg(outerMM), mm_to_deg(innerMM),
+                             MAX_SPEED_DPS, innerSpeed)) {
+                exit(1);
+            }
+            syslog(LOG_NOTICE, "CIRCLE FINISHED");
+        } else {
+            // 正方形：500mm直進→左タイヤを止めて右へ90°、を4回。
+            syslog(LOG_NOTICE, "SQUARE START");
+            for (int side = 0; side < 4; side++) {
+                if (!move_wheels(motorA, motorB, straightDeg, straightDeg,
+                                 MAX_SPEED_DPS, MAX_SPEED_DPS)) {
+                    exit(1);
+                }
+                // 右タイヤを後退させて、左タイヤを角に固定して右旋回。
+                if (!move_wheels(motorA, motorB, 0, -turnDeg,
+                                 0, TURN_SPEED_DPS)) {
+                    exit(1);
+                }
+            }
+            syslog(LOG_NOTICE, "SQUARE FINISHED");
+        }
+
+        // 走行終了後は停止して、上の選択画面へ戻る。
+        pup_motor_brake(motorA);
+        pup_motor_brake(motorB);
+    }
 }
