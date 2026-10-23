@@ -8,16 +8,14 @@
 #include "spike/pup/forcesensor.h" // フォースセンサー（押す強さを検出）
 #include "spike/hub/speaker.h"     // 音楽を鳴らす
 
-// SOUND_S2と同じく、1音ずつ鳴らす。
-// 音が終わるたびにセンサを確認する（途中の音は止めない）。
-static bool play_note(pup_device_t *sensor, bool *released, uint16_t note, int duration_ms)
+// 1音の再生が終わったら、ボタンを確認する。
+// 最初の押下を離した後の押下だけを「2回目」と判定する。
+static bool check_stop(pup_device_t *sensor, bool *released)
 {
-    hub_speaker_play_tone(note, duration_ms);
-
     if (!pup_force_sensor_touched(sensor)) {
-        *released = true;   // 最初の押下を離した
+        *released = true;
     } else if (*released) {
-        return true;        // 2回目の押下を確認した
+        return true;
     }
     return false;
 }
@@ -62,32 +60,51 @@ void Main(intptr_t exinf)
     // SOUND_S2のように音を1つずつ記述し、各音の後でボタンを確認する。
     // 途中で止めなければ、曲を最初から繰り返す。
     while (1) {
-        if (play_note(ForceSensor, &released, NOTE_G4, 200)) break;
-        if (play_note(ForceSensor, &released, NOTE_G4, 200)) break;
-        if (play_note(ForceSensor, &released, NOTE_G4, 200)) break;
+        hub_speaker_play_tone(NOTE_G4, 200);
+        if (check_stop(ForceSensor, &released)) break;
+        hub_speaker_play_tone(NOTE_G4, 200);
+        if (check_stop(ForceSensor, &released)) break;
+        hub_speaker_play_tone(NOTE_G4, 200);
+        if (check_stop(ForceSensor, &released)) break;
 
-        if (play_note(ForceSensor, &released, NOTE_C5, 1200)) break;
-        if (play_note(ForceSensor, &released, NOTE_G5, 1200)) break;
+        hub_speaker_play_tone(NOTE_C5, 1200);
+        if (check_stop(ForceSensor, &released)) break;
+        hub_speaker_play_tone(NOTE_G5, 1200);
+        if (check_stop(ForceSensor, &released)) break;
 
-        if (play_note(ForceSensor, &released, NOTE_F5, 200)) break;
-        if (play_note(ForceSensor, &released, NOTE_E5, 200)) break;
-        if (play_note(ForceSensor, &released, NOTE_D5, 200)) break;
+        hub_speaker_play_tone(NOTE_F5, 200);
+        if (check_stop(ForceSensor, &released)) break;
+        hub_speaker_play_tone(NOTE_E5, 200);
+        if (check_stop(ForceSensor, &released)) break;
+        hub_speaker_play_tone(NOTE_D5, 200);
+        if (check_stop(ForceSensor, &released)) break;
 
-        if (play_note(ForceSensor, &released, NOTE_C6, 1200)) break;
-        if (play_note(ForceSensor, &released, NOTE_G5, 600)) break;
+        hub_speaker_play_tone(NOTE_C6, 1200);
+        if (check_stop(ForceSensor, &released)) break;
+        hub_speaker_play_tone(NOTE_G5, 600);
+        if (check_stop(ForceSensor, &released)) break;
 
-        if (play_note(ForceSensor, &released, NOTE_F5, 200)) break;
-        if (play_note(ForceSensor, &released, NOTE_E5, 200)) break;
-        if (play_note(ForceSensor, &released, NOTE_D5, 200)) break;
+        hub_speaker_play_tone(NOTE_F5, 200);
+        if (check_stop(ForceSensor, &released)) break;
+        hub_speaker_play_tone(NOTE_E5, 200);
+        if (check_stop(ForceSensor, &released)) break;
+        hub_speaker_play_tone(NOTE_D5, 200);
+        if (check_stop(ForceSensor, &released)) break;
 
-        if (play_note(ForceSensor, &released, NOTE_C6, 1200)) break;
-        if (play_note(ForceSensor, &released, NOTE_G5, 600)) break;
+        hub_speaker_play_tone(NOTE_C6, 1200);
+        if (check_stop(ForceSensor, &released)) break;
+        hub_speaker_play_tone(NOTE_G5, 600);
+        if (check_stop(ForceSensor, &released)) break;
 
-        if (play_note(ForceSensor, &released, NOTE_F5, 200)) break;
-        if (play_note(ForceSensor, &released, NOTE_E5, 200)) break;
-        if (play_note(ForceSensor, &released, NOTE_F5, 200)) break;
+        hub_speaker_play_tone(NOTE_F5, 200);
+        if (check_stop(ForceSensor, &released)) break;
+        hub_speaker_play_tone(NOTE_E5, 200);
+        if (check_stop(ForceSensor, &released)) break;
+        hub_speaker_play_tone(NOTE_F5, 200);
+        if (check_stop(ForceSensor, &released)) break;
 
-        if (play_note(ForceSensor, &released, NOTE_D5, 1200)) break;
+        hub_speaker_play_tone(NOTE_D5, 1200);
+        if (check_stop(ForceSensor, &released)) break;
     }
 
     // 2回目の押下を確認したときだけ、LCDに表示して終了する。
