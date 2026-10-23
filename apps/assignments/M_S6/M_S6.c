@@ -52,6 +52,7 @@ void Main(intptr_t exinf)
 
     hub_button_t buttons = 0;
     int shape = 0;                // 0：円、1：正方形
+    int stalled = 0;              // ストール検知で1にするフラグ
     hub_speaker_set_volume(5);
 
     while (1) {
@@ -94,6 +95,10 @@ void Main(intptr_t exinf)
             pup_motor_set_speed(motorE, innerSpeed);
 
             while (pup_motor_get_count(motorA) < circleAngle) {
+                if (pup_motor_is_stalled(motorA) || pup_motor_is_stalled(motorE)) {
+                    stalled = 1;
+                    break;  // 走行中の左右どちらかがストール
+                }
                 dly_tsk(10000); // 10msごとに回転角度を確認
             }
             pup_motor_brake(motorA);
@@ -108,10 +113,17 @@ void Main(intptr_t exinf)
                 pup_motor_set_speed(motorE, 300);
 
                 while (pup_motor_get_count(motorA) < straightAngle) {
+                    if (pup_motor_is_stalled(motorA) || pup_motor_is_stalled(motorE)) {
+                        stalled = 1;
+                        break;
+                    }
                     dly_tsk(10000);
                 }
                 pup_motor_brake(motorA);
                 pup_motor_brake(motorE);
+                if (stalled) {
+                    break;  // 以降の辺の走行を飛ばす
+                }
 
                 // 左タイヤを止めて、右タイヤだけ後退させて90度曲がる
                 dly_tsk(100000);
@@ -119,15 +131,32 @@ void Main(intptr_t exinf)
                 pup_motor_set_speed(motorE, -220);
 
                 while (pup_motor_get_count(motorE) > -turnAngle) {
+                    if (pup_motor_is_stalled(motorE)) {
+                        stalled = 1;
+                        break;
+                    }
                     dly_tsk(10000);
                 }
                 pup_motor_brake(motorE);
+                if (stalled) {
+                    break;  // 以降の辺の走行を飛ばす
+                }
                 dly_tsk(100000);
             }
         }
 
-        // 7. 走行終了。選択画面へ戻り、何度でも試せる。
+        // 7. ストールしたら選択画面に戻らず終了処理へ進む。
+        if (stalled) {
+            break;
+        }
+
+        // 正常な場合は選択画面に戻ってもう一度試せる。
         pup_motor_brake(motorA);
         pup_motor_brake(motorE);
     }
+
+    // 8. ストール時：両モータを停止して終了
+    pup_motor_brake(motorA);
+    pup_motor_brake(motorE);
+    exit(1);
 }

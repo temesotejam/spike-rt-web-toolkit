@@ -1,7 +1,7 @@
 {
   "id": "M_S6",
   "name": "レポート問題 - M_S6（円・正方形走行）",
-  "description": "初学者向けの順番に読めるM_S6。Advanced Driving Base (A/E)、88mmタイヤ。左右ボタンで円／正方形を切替、LCDで表示、中央ボタンで決定音。各動作の直前にpup_motor_reset_countでエンコーダを0にし、set_speed → get_countをwhileで確認 → brakeの順で走行。左タイヤ基準の半径0.25m円／各辺0.5m正方形を選択でき、走行後も選択画面に戻る。",
-  "warning": "WHEEL_TRACK_MM=144mmは暫定値。実機の左右車輪中心間距離を測って調整してください。A=左、E=右の正回転が前進の前提です。学習用の単純なwhile待機のため、車輪が止まったり引っかかったりすると走行処理から抜けられません。周囲の安全を確保して動作確認してください。",
+  "description": "初学者向けM_S6。Advanced Driving Base (A/E)、88mmタイヤ。左右ボタンで円／正方形を切替、LCDで表示、中央ボタンで決定音。エンコーダを0にリセットし、set_speed→get_countをwhileで確認→brakeで走行。走行中はpup_motor_is_stalledでストールを検知し、フラグを立てて残りの走行を飛ばし、両モータを止めて終了。",
+  "warning": "WHEEL_TRACK_MM=144mmは暫定値。実機で左右車輪中心間距離と前進方向を確認してください。ストール検知の感度は機体・負荷に依存し、検知できない異常ではwhileで待ち続ける可能性があります。",
   "origin": "apps/pd_M_S5"
 }
