@@ -1,4 +1,4 @@
-name: Build all SPIKE-RT apps and deploy Pages
+name: Build changed SPIKE-RT apps and deploy Pages
 
 on:
   push:
@@ -136,7 +136,24 @@ jobs:
           echo "Applications:"
           cat spike-rt/app-list.txt
 
+      # A bundle from a previous successful run retains unchanged binaries.
+      # If unavailable, the incremental planner rebuilds all missing entries.
+      - name: Restore previously built firmware
+        id: firmware-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: firmware-cache
+          key: firmware-bundle-v1-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            firmware-bundle-v1-${{ runner.os }}-
+
+      - name: Detect changed applications
+        id: incremental
+        shell: bash
+        run: python3 .github/scripts/incremental-firmware.py plan
+
       - name: Patch pinned builder Dockerfile dependencies
+        if: steps.incremental.outputs.needs_build == 'true'
         shell: bash
         run: |
           set -euxo pipefail
@@ -163,16 +180,24 @@ jobs:
           grep -q "curl ca-certificates bzip2 make libncurses5 python3 git" "${DOCKERFILE}"
           grep -n "apt install" -A4 "${DOCKERFILE}"
 
-      - name: Build pinned SPIKE-RT builder image
-        shell: bash
-        run: |
-          set -euxo pipefail
-          docker build \
-            --file spike-rt/tools/docker/slim.dockerfile \
-            --tag "${SPIKE_RT_IMAGE}" \
-            spike-rt/tools/docker
+      - name: Set up Docker Buildx
+        if: steps.incremental.outputs.needs_build == 'true'
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build kernel and all applications
+      # Docker toolchain layers also survive runs, not only app firmware.
+      - name: Build pinned SPIKE-RT builder image
+        if: steps.incremental.outputs.needs_build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: spike-rt/tools/docker
+          file: spike-rt/tools/docker/slim.dockerfile
+          load: true
+          tags: ${{ env.SPIKE_RT_IMAGE }}
+          cache-from: type=gha,scope=spike-rt-v0.2.0-builder
+          cache-to: type=gha,mode=max,scope=spike-rt-v0.2.0-builder
+
+      - name: Build kernel and changed applications
+        if: steps.incremental.outputs.needs_build == 'true'
         shell: bash
         run: |
           set -o pipefail
@@ -236,10 +261,21 @@ jobs:
                   failed_apps+=("${APP}")
                   echo "BUILD FAILED: ${APP}"
                 fi
-              done < app-list.txt
+              done < app-to-build.txt
               printf "FAILED APPS: %s\\n" "${failed_apps[*]:-none}"
               test "${#failed_apps[@]}" -eq 0
             ' 2>&1 | tee build.log
+
+      - name: Verify all firmware and update reuse bundle
+        shell: bash
+        run: python3 .github/scripts/incremental-firmware.py finalize
+
+      - name: Save firmware reuse bundle
+        if: steps.firmware-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: firmware-cache
+          key: firmware-bundle-v1-${{ runner.os }}-${{ github.sha }}
 
       - name: Upload diagnostic build logs
         if: always()
@@ -273,7 +309,7 @@ jobs:
           from pathlib import Path
 
           apps_root = Path(os.environ["APPS_ROOT"])
-          build_root = Path("spike-rt/build")
+          build_root = Path("firmware-cache")
           site_root = Path("site/firmware")
           app_ids = [
               line.strip()
@@ -297,7 +333,7 @@ jobs:
                   if configured_id != app_id:
                       raise SystemExit(f"{metadata_path}: id must be {app_id!r}")
 
-              build_dir = build_root / f"obj-primehub_{app_id}"
+              build_dir = build_root / app_id
               firmware_path = build_dir / "asp.bin"
               if not firmware_path.is_file() or firmware_path.stat().st_size == 0:
                   raise SystemExit(f"Missing firmware: {firmware_path}")
@@ -308,7 +344,7 @@ jobs:
               shutil.copy2(firmware_path, output_dir / "asp.bin")
               shutil.copy2(build_dir / "asp.bin.sha256", output_dir / "asp.bin.sha256")
               shutil.copy2(build_dir / "size.txt", output_dir / "size.txt")
-              shutil.copy2(build_root / "app-logs" / f"{app_id}.log", output_dir / "build.log")
+              shutil.copy2(build_dir / "build.log", output_dir / "build.log")
 
               firmware_bytes = firmware_path.read_bytes()
               sha256 = hashlib.sha256(firmware_bytes).hexdigest()
@@ -325,7 +361,7 @@ jobs:
                   "maxBytes": 992 * 1024,
                   "size": size,
                   "sha256": sha256,
-                  "sourceCommit": os.environ["GITHUB_SHA"],
+                  "sourceCommit": (build_dir / "built_commit.txt").read_text(encoding="utf-8").strip(),
                   "sourcePath": source_dir.as_posix(),
                   "category": "assignment" if source_dir.parent == apps_root / "assignments" else "sample",
                   "spikeRtCommit": os.environ["SPIKE_RT_REF"],
