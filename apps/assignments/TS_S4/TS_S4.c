@@ -11,22 +11,34 @@
 // マルチタスクを使わずに、曲を鳴らしながら10ms間隔で押下を確認する。
 #define CHECK_INTERVAL_MS 10
 
+// メインテーマの基本テンポ：約100 BPM（4分音符 = 600ms）。
+// 3連符 = 1拍を3等分、2分音符 = 2拍。
+// リズムを変える場合は TEMPO_BPM を調整する。
+#define TEMPO_BPM        100
+#define QUARTER_MS       (60000 / TEMPO_BPM)
+#define TRIPLET_MS       (QUARTER_MS / 3)
+#define HALF_MS          (QUARTER_MS * 2)
+
+// 同じ音が連続する箇所だけ短く切り、各音が区別できるようにする。
+#define SAME_NOTE_GAP_MS 30
+
 typedef struct {
     uint16_t note;         // 音階（周波数）
     uint16_t duration_ms;  // 音の長さ（ミリ秒）
 } melody_note_t;
 
 // スター・ウォーズのメインテーマ冒頭（短いアレンジ）。
-// 音階や時間を編集すると、別のメロディにもできる。
+// 3連符→長い2分音符→下降3連符、というリズムに調整。
+// 音階の順番は以前のまま（音程は変更しない）。
 static const melody_note_t melody[] = {
-    { NOTE_G4, 180 }, { NOTE_G4, 180 }, { NOTE_G4, 180 },
-    { NOTE_C5, 600 }, { NOTE_G5, 600 },
-    { NOTE_F5, 180 }, { NOTE_E5, 180 }, { NOTE_D5, 180 },
-    { NOTE_C6, 600 }, { NOTE_G5, 360 },
-    { NOTE_F5, 180 }, { NOTE_E5, 180 }, { NOTE_D5, 180 },
-    { NOTE_C6, 600 }, { NOTE_G5, 360 },
-    { NOTE_F5, 180 }, { NOTE_E5, 180 }, { NOTE_F5, 180 },
-    { NOTE_D5, 600 }
+    { NOTE_G4, TRIPLET_MS }, { NOTE_G4, TRIPLET_MS }, { NOTE_G4, TRIPLET_MS },
+    { NOTE_C5, HALF_MS },    { NOTE_G5, HALF_MS },
+    { NOTE_F5, TRIPLET_MS }, { NOTE_E5, TRIPLET_MS }, { NOTE_D5, TRIPLET_MS },
+    { NOTE_C6, HALF_MS },    { NOTE_G5, QUARTER_MS },
+    { NOTE_F5, TRIPLET_MS }, { NOTE_E5, TRIPLET_MS }, { NOTE_D5, TRIPLET_MS },
+    { NOTE_C6, HALF_MS },    { NOTE_G5, QUARTER_MS },
+    { NOTE_F5, TRIPLET_MS }, { NOTE_E5, TRIPLET_MS }, { NOTE_F5, TRIPLET_MS },
+    { NOTE_D5, HALF_MS }
 };
 
 // 再生は2回目の押下があるまで繰り返す（通常は戻らない）。
@@ -40,12 +52,20 @@ static void play_sound(pup_device_t *force_sensor)
     // 再生を終える条件は2回目の押下だけ。
     while (1) {
       for (unsigned int i = 0; i < sizeof(melody) / sizeof(melody[0]); i++) {
-        // 再生時間を指定しないので、途中でもセンサを確認できる。
-        // 次の音をそのまま開始し、音と音の間で明示的には停止しない。
+        // 非ブロッキング再生なので、長い音の途中でもセンサを確認できる。
+        // 異なる音はつなげ、同じ音が続くときだけ30msの区切りを入れる。
         hub_speaker_play_tone(melody[i].note, SOUND_MANUAL_STOP);
 
         for (unsigned int elapsed = 0; elapsed < melody[i].duration_ms;
              elapsed += CHECK_INTERVAL_MS) {
+
+            // 同音が続く場合、次の音の直前だけ短い無音を作る。
+            // この無音の間もセンサ確認は続ける。
+            const unsigned int note_count = sizeof(melody) / sizeof(melody[0]);
+            if (i + 1 < note_count && melody[i].note == melody[i + 1].note &&
+                elapsed == melody[i].duration_ms - SAME_NOTE_GAP_MS) {
+                hub_speaker_stop();
+            }
 
             // 初回に押したままでも、2回目の押下と誤認しない。
             // 一度離した後、もう一度押した場合だけ停止する。
