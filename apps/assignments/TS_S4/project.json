@@ -1,0 +1,6 @@
+{
+  "id": "TS_S4",
+  "name": "レポート問題 - TS_S4",
+  "description": "フォースセンサを押すと「Pressed!」と表示し、スター・ウォーズのメインテーマ冒頭を再生して終了する",
+  "origin": "apps/pd_TS_S1"
+}
