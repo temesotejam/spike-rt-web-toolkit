@@ -1,6 +1,6 @@
 {
   "id": "DC_S2",
   "name": "レポート問題 - DC_S2",
-  "description": "DC_S1を改造し、Eポートの超音波距離センサで250mm未満はRed、250～499mmはYellow、500mm以上はBlueをUSBシリアルログに表示し、Hubの中央ボタンのライトも連動させる。",
+  "description": "Eポートの超音波距離センサで250mm未満はRed、250～499mmはYellow、500mm以上はBlueをLCDに1文字ずつ表示する。表示中も単一タスクで距離測定を続け、中央ボタンのライトも連動する。計測エラー時はErrを表示。距離はUSBシリアルログへ出力する。",
   "origin": "apps/pd_DC_S1"
 }
