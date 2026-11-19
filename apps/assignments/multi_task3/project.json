@@ -1,0 +1,6 @@
+{
+  "id": "multi_task3",
+  "name": "PD実践 - multi_task3（3タスク並列）",
+  "description": "multi_task2を基に、MAIN_TASK、SUB_TASK1_A、SUB_TASK2の3タスクをセマフォで切り替え、各タスクのカウントをsyslogへ出力する課題。",
+  "origin": "apps/pd_multi_task2"
+}

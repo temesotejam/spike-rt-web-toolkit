@@ -13,6 +13,8 @@
 | [CS_S3](CS_S3/CS_S3.c) | Dポートのカラーセンサーで周囲の明るさを調べ、環境光の値が6以上なら「きらきら星」を繰り返し演奏します。各音の終了後に値を確認し、5以下なら一時停止、明るくなると続きの音から再開します。 |
 | [DC_S2](DC_S2/DC_S2.c) | Eポートの超音波センサーで距離を測り、中央ボタンのライトを250mm未満で赤、250mm以上500mm未満で黄、500mm以上で青にします。LCDには「Red／Yellow／Blue」を1文字ずつ繰り返し表示します。計測エラー時はライトを消灯し、LCDに「Err」を表示します。距離の数値はシリアルモニタに出力します。 |
 | [M_S6](M_S6/M_S6.c) | 左右ボタンで円・正方形を選び、中央ボタンで決定すると走行します。左モータはAポート、右モータはEポートを使い、左タイヤの軌跡が半径250mmの円、または一辺500mmの正方形を目標に走ります。正常終了後は選択画面に戻り、ストール検知時は両モータをフリー停止して終了します。 |
+| [multi_task1_A](multi_task1_A/multi_task1_A.c) | 元サンプルを基に、SUB_TASKを先に完了させてからMAIN_TASKを実行します。 |
+| [multi_task3](multi_task3/multi_task3.c) | MAIN_TASK、SUB_TASK1_A、SUB_TASK2の3タスクがセマフォで実行権を渡しながらカウントします。 |
 
 ## サンプルから課題を作る
 
@@ -25,6 +27,46 @@
 
 
 生成時にヘッダーファイル名も課題IDに統一されます。たとえば元サンプルの `pd_LCD_S2.h` と `LCD_S2.h` が同じ内容なら、課題IDが `kadai_01` なら `kadai_01.h` だけが残り、Cファイル内の `#include` も自動的に修正されます。独自の補助ヘッダーは削除されません。
+
+## multi_task1_Aとmulti_task2の動作比較
+
+比較対象の元サンプルは、[multi_task1_A](../pd_multi_task1_A/pd_multi_task1_A.c) と [multi_task2](../pd_multi_task2/pd_multi_task2.c) です。
+
+- **multi_task1_A**：MAIN_TASKはループ内の`tslp_tsk(5)`で5msだけ待ち状態になります。一方、SUB_TASKは最初の`wai_sem(SEM_SUB)`で待ち状態になり、MAIN_TASKが全カウントを終えて`sig_sem(SEM_SUB)`を実行するまで解除されません。そのため、MAIN_TASKが時間待ちしている間もSUB_TASKは実行できず、2つのタスクは並列動作しません。MAIN_TASKは「実行中」と「時間待ち」を繰り返し、SUB_TASKはセマフォ待ちのままです。
+- **multi_task2**：MAIN_TASKは各カウントの後に`sig_sem(SEM_SUB)`でSUB_TASKを起こし、次のループで`wai_sem(SEM_MAIN)`を実行して待ち状態になります。SUB_TASKは起床してカウントし、`sig_sem(SEM_MAIN)`でMAIN_TASKへ実行権を返します。この受け渡しを繰り返すため、両タスクが交互に動作します。
+
+つまり、`tslp_tsk`による時間待ちだけでは、セマフォで待ち続けている別タスクは実行されません。multi_task2では、セマフォの解放と待ちを組み合わせて、実行可能なタスクを切り替えています。
+
+## multi_task1_A（SUB_TASK先行）
+
+この課題版では、元サンプルの動作を保ちながら、次の部分だけを変更しています。
+
+- `multi_task1_A.cfg`でSUB_TASKの優先度をMAIN_TASKより高くする（優先度の数値を小さくする）
+- `SEM_SUB`の初期値を1にし、SUB_TASKが最初から処理を開始できるようにする
+- `SEM_MAIN`の初期値を0にし、MAIN_TASKは先頭の`wai_sem(SEM_MAIN)`で待機する
+- SUB_TASKが全カウントを終えたところで`sig_sem(SEM_MAIN)`を実行し、MAIN_TASKを起こす
+
+優先度だけを入れ替えると、元のSUB_TASKは最初に`wai_sem(SEM_SUB)`で待ってしまうため、指定された順番になりません。セマフォの初期値と通知先も合わせて変更することで、SUB_TASKの全カウント後にMAIN_TASKのカウントが始まります。
+
+## multi_task3（3タスク並列）
+
+multi_task2のセマフォによる実行権の受け渡しを3タスクに拡張しています。
+
+`SEM_MAIN → SEM_SUB1_A → SEM_SUB2 → SEM_MAIN` の順に実行権を渡し、各タスクが0～100をsyslogへ出力します。想定される出力順は、たとえば次のようになります。
+
+```text
+MAIN_TASK = 0
+SUB_TASK1_A = 0
+SUB_TASK2 = 0
+MAIN_TASK = 1
+SUB_TASK1_A = 1
+SUB_TASK2 = 1
+...
+```
+
+`multi_task3.h`には`sub_task1_A`と`sub_task2`のプロトタイプ宣言を追加し、`multi_task3.cfg`には2つのタスクと3つのセマフォを定義しています。最後のSUB_TASK2が終了ログを出してからMAIN_TASKを終了させるため、最終カウントも確認できます。
+
+なお、SPIKE Prime Hubは単一CPUで動作するため、3タスクが同じ瞬間にCPU上で実行されるわけではありません。ここでの「並列動作」は、タスクが待ち状態と実行状態を切り替えながら並行して進むマルチタスク動作を指します。
 
 ## TS_S4の仕組み：マルチタスクを使わない演奏と押下確認
 

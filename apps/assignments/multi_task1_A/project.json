@@ -1,0 +1,6 @@
+{
+  "id": "multi_task1_A",
+  "name": "PD実践 - multi_task1_A（SUB_TASK先行）",
+  "description": "元サンプルを基に、SUB_TASKを先に完了させてからMAIN_TASKを実行する優先度・セマフォ制御の課題。",
+  "origin": "apps/pd_multi_task1_A"
+}
