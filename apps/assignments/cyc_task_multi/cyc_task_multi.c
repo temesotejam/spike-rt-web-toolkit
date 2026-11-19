@@ -113,6 +113,95 @@ void count_task(intptr_t exinf)
     }
 }
 
+/*
+ * 【直進制御の改善】
+ * 以前はA/Eへ同じ速度を順番に指令し、A側のエンコーダだけで終了判定していた。
+ * そのため、始動遅れや左右の負荷差があると、片側が先に目標へ達した時点で
+ * 両輪を停止してしまい、左右の走行距離に差が残っていた。
+ *
+ * 改善後は両輪のエンコーダ差を10msごとに確認し、先行側を減速・遅れ側を増速する。
+ * また、A/Eそれぞれが目標角度に達した時点で個別にブレーキをかける。
+ * これにより、モータ指令の開始時刻に差があっても、左右の最終回転量をそろえる。
+ */
+#define STRAIGHT_BASE_SPEED  300
+#define STRAIGHT_MIN_SPEED   120
+#define STRAIGHT_MAX_SPEED   360
+#define STRAIGHT_SYNC_GAIN   3
+#define STRAIGHT_UPDATE_US   10000
+
+static int32_t clamp_straight_speed(int32_t speed)
+{
+    if (speed < STRAIGHT_MIN_SPEED) return STRAIGHT_MIN_SPEED;
+    if (speed > STRAIGHT_MAX_SPEED) return STRAIGHT_MAX_SPEED;
+    return speed;
+}
+
+/* 直進成功なら1、ストール検知なら0を返す */
+static int drive_straight(pup_motor_t *motorA,
+                          pup_motor_t *motorE,
+                          int32_t target_angle)
+{
+    int doneA = 0;
+    int doneE = 0;
+
+    pup_motor_reset_count(motorA);
+    pup_motor_reset_count(motorE);
+
+    /* モータAPIは個別指令なので完全な同時始動ではない。
+       直後からエンコーダ差のフィードバックで始動遅れを補正する。 */
+    pup_motor_set_speed(motorA, STRAIGHT_BASE_SPEED);
+    pup_motor_set_speed(motorE, STRAIGHT_BASE_SPEED);
+
+    while (!doneA || !doneE) {
+        int32_t countA = pup_motor_get_count(motorA);
+        int32_t countE = pup_motor_get_count(motorE);
+
+        if (pup_motor_is_stalled(motorA) ||
+            pup_motor_is_stalled(motorE)) {
+            pup_motor_stop(motorA);
+            pup_motor_stop(motorE);
+            return 0;
+        }
+
+        /* 片側が目標に達したら、その側だけ先に停止する */
+        if (!doneA && countA >= target_angle) {
+            pup_motor_brake(motorA);
+            doneA = 1;
+        }
+        if (!doneE && countE >= target_angle) {
+            pup_motor_brake(motorE);
+            doneE = 1;
+        }
+
+        if (doneA && doneE) {
+            break;
+        }
+
+        /* Aが先行していればAを遅く、Eを速くする。逆なら反対に補正。 */
+        {
+            int32_t error = countA - countE;
+            int32_t correction = error * STRAIGHT_SYNC_GAIN;
+            int32_t speedA = clamp_straight_speed(
+                STRAIGHT_BASE_SPEED - correction);
+            int32_t speedE = clamp_straight_speed(
+                STRAIGHT_BASE_SPEED + correction);
+
+            if (!doneA) {
+                pup_motor_set_speed(motorA, speedA);
+            }
+            if (!doneE) {
+                pup_motor_set_speed(motorE, speedE);
+            }
+        }
+
+        dly_tsk(STRAIGHT_UPDATE_US);
+    }
+
+    pup_motor_brake(motorA);
+    pup_motor_brake(motorE);
+    return 1;
+}
+
 /*------------------------------------------------------------
  * MOVE_TASK：M_S6のモータ制御を基に50cm四方を1周
  *
@@ -152,23 +241,10 @@ void move_task(intptr_t exinf)
     syslog(LOG_NOTICE, "MOVE_TASK: square path start");
 
     for (int side = 0; side < 4; side++) {
-        /* 1辺目～4辺目：左右モータを同時に前進 */
-        pup_motor_reset_count(motorA);
-        pup_motor_reset_count(motorE);
-        pup_motor_set_speed(motorA, 300);
-        pup_motor_set_speed(motorE, 300);
-
-        while (pup_motor_get_count(motorA) < straight_angle) {
-            if (pup_motor_is_stalled(motorA) ||
-                pup_motor_is_stalled(motorE)) {
-                goto motor_stalled;
-            }
-            /* 【並列動作のための変更】待ち時間中に他タスクへCPUを譲る */
-            dly_tsk(TASK_DELAY_US);
+        /* 1辺目～4辺目：左右エンコーダを同期させながら50cm直進 */
+        if (!drive_straight(motorA, motorE, straight_angle)) {
+            goto motor_stalled;
         }
-
-        pup_motor_brake(motorA);
-        pup_motor_brake(motorE);
         dly_tsk(100000);
 
         /* 90度右旋回：左車輪を止め、右車輪だけ逆転 */

@@ -12,6 +12,95 @@
 #define WHEEL_DIAMETER_MM  88.0f
 #define WHEEL_TRACK_MM     144.0f  // 左右タイヤ中心間距離（実機に合わせて調整）
 
+/*
+ * 【直進制御の改善】
+ * 以前はA/Eへ同じ速度を順番に指令し、A側のエンコーダだけで終了判定していた。
+ * そのため、始動遅れや左右の負荷差があると、片側が先に目標へ達した時点で
+ * 両輪を停止してしまい、左右の走行距離に差が残っていた。
+ *
+ * 改善後は両輪のエンコーダ差を10msごとに確認し、先行側を減速・遅れ側を増速する。
+ * また、A/Eそれぞれが目標角度に達した時点で個別にブレーキをかける。
+ * これにより、モータ指令の開始時刻に差があっても、左右の最終回転量をそろえる。
+ */
+#define STRAIGHT_BASE_SPEED  300
+#define STRAIGHT_MIN_SPEED   120
+#define STRAIGHT_MAX_SPEED   360
+#define STRAIGHT_SYNC_GAIN   3
+#define STRAIGHT_UPDATE_US   10000
+
+static int32_t clamp_straight_speed(int32_t speed)
+{
+    if (speed < STRAIGHT_MIN_SPEED) return STRAIGHT_MIN_SPEED;
+    if (speed > STRAIGHT_MAX_SPEED) return STRAIGHT_MAX_SPEED;
+    return speed;
+}
+
+/* 直進成功なら1、ストール検知なら0を返す */
+static int drive_straight(pup_motor_t *motorA,
+                          pup_motor_t *motorE,
+                          int32_t target_angle)
+{
+    int doneA = 0;
+    int doneE = 0;
+
+    pup_motor_reset_count(motorA);
+    pup_motor_reset_count(motorE);
+
+    /* モータAPIは個別指令なので完全な同時始動ではない。
+       直後からエンコーダ差のフィードバックで始動遅れを補正する。 */
+    pup_motor_set_speed(motorA, STRAIGHT_BASE_SPEED);
+    pup_motor_set_speed(motorE, STRAIGHT_BASE_SPEED);
+
+    while (!doneA || !doneE) {
+        int32_t countA = pup_motor_get_count(motorA);
+        int32_t countE = pup_motor_get_count(motorE);
+
+        if (pup_motor_is_stalled(motorA) ||
+            pup_motor_is_stalled(motorE)) {
+            pup_motor_stop(motorA);
+            pup_motor_stop(motorE);
+            return 0;
+        }
+
+        /* 片側が目標に達したら、その側だけ先に停止する */
+        if (!doneA && countA >= target_angle) {
+            pup_motor_brake(motorA);
+            doneA = 1;
+        }
+        if (!doneE && countE >= target_angle) {
+            pup_motor_brake(motorE);
+            doneE = 1;
+        }
+
+        if (doneA && doneE) {
+            break;
+        }
+
+        /* Aが先行していればAを遅く、Eを速くする。逆なら反対に補正。 */
+        {
+            int32_t error = countA - countE;
+            int32_t correction = error * STRAIGHT_SYNC_GAIN;
+            int32_t speedA = clamp_straight_speed(
+                STRAIGHT_BASE_SPEED - correction);
+            int32_t speedE = clamp_straight_speed(
+                STRAIGHT_BASE_SPEED + correction);
+
+            if (!doneA) {
+                pup_motor_set_speed(motorA, speedA);
+            }
+            if (!doneE) {
+                pup_motor_set_speed(motorE, speedE);
+            }
+        }
+
+        dly_tsk(STRAIGHT_UPDATE_US);
+    }
+
+    pup_motor_brake(motorA);
+    pup_motor_brake(motorE);
+    return 1;
+}
+
 void Main(intptr_t exinf)
 {
     // 1. モータを取得して、前進方向をそろえる（M_S5と同じ）
@@ -112,22 +201,11 @@ void Main(intptr_t exinf)
             // 6-B. 正方形：500mm直進→90度右折を4回繰り返す。
             for (int side = 0; side < 4; side++) {
                 // 500mm直進する
-                pup_motor_reset_count(motorA);  // 左タイヤの角度を0に戻す
-                pup_motor_set_speed(motorA, 300);
-                pup_motor_set_speed(motorE, 300);
-
-                while (pup_motor_get_count(motorA) < straightAngle) {
-                    if (pup_motor_is_stalled(motorA) || pup_motor_is_stalled(motorE)) {
-                        stalled = 1;
-                        break;
-                    }
-                    dly_tsk(10000);
-                }
-                if (stalled) {
+                // 【改善】左右のエンコーダ差を補正し、両輪が目標角度に達してから次へ進む
+                if (!drive_straight(motorA, motorE, straightAngle)) {
+                    stalled = 1;
                     break;  // 以降の辺の走行を飛ばす
                 }
-                pup_motor_brake(motorA);
-                pup_motor_brake(motorE);
 
                 // 左タイヤを止めて、右タイヤだけ後退させて90度曲がる
                 dly_tsk(100000);
