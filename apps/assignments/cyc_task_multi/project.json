@@ -1,0 +1,6 @@
+{
+  "id": "cyc_task_multi",
+  "name": "PD実践 - cyc_task_multi（3タスク並列）",
+  "description": "cyc_taskを基に、スター・ウォーズの連続再生、周期ハンドラによる1秒ごとのLCDカウント、M_S6を応用した50cm四方の走行を3タスクで並列動作させる課題。",
+  "origin": "apps/pd_cyc_task + apps/assignments/M_S6 + apps/assignments/TS_S4"
+}

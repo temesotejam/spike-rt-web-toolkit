@@ -1,0 +1,6 @@
+{
+  "id": "cyc_task_realtime",
+  "name": "PD実践 - cyc_task_realtime（蓋開閉の高速応答）",
+  "description": "カラーセンサーの環境光または反射光を10msごとに監視し、蓋が開いたらスター・ウォーズを再生、閉じたら直ちに停止するリアルタイム応答課題。",
+  "origin": "apps/pd_cyc_task + apps/assignments/TS_S4 + apps/assignments/CS_S3"
+}
