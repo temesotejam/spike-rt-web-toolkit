@@ -55,8 +55,8 @@ static int drive_straight(pup_motor_t *motorA,
         int32_t countA = pup_motor_get_count(motorA);
         int32_t countE = pup_motor_get_count(motorE);
 
-        if (pup_motor_is_stalled(motorA) ||
-            pup_motor_is_stalled(motorE)) {
+        if ((!doneA && pup_motor_is_stalled(motorA)) ||
+            (!doneE && pup_motor_is_stalled(motorE))) {
             pup_motor_stop(motorA);
             pup_motor_stop(motorE);
             return 0;
