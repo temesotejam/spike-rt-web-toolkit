@@ -13,26 +13,76 @@
 #define WHEEL_TRACK_MM     144.0f  // 左右タイヤ中心間距離（実機に合わせて調整）
 
 /*
- * 【直進制御の改善】
- * 以前はA/Eへ同じ速度を順番に指令し、A側のエンコーダだけで終了判定していた。
- * そのため、始動遅れや左右の負荷差があると、片側が先に目標へ達した時点で
- * 両輪を停止してしまい、左右の走行距離に差が残っていた。
+ * 【直進制御の改善：左右同期＋台形速度プロファイル】
+ * 左右のエンコーダ差を10msごとに補正するだけでなく、
+ * 走行距離に応じて「低速始動→加速→定速→減速→低速停止」とする。
  *
- * 改善後は両輪のエンコーダ差を10msごとに確認し、先行側を減速・遅れ側を増速する。
- * また、A/Eそれぞれが目標角度に達した時点で個別にブレーキをかける。
- * これにより、モータ指令の開始時刻に差があっても、左右の最終回転量をそろえる。
+ * 始動直後の片側だけの動きや左右の始動遅れを抑え、
+ * 終了直前の慣性による行き過ぎも小さくすることが狙い。
+ *
+ * 速度プロファイルは平均エンコーダ角度から決め、
+ * 減速開始位置は先行側のエンコーダ角度から決める。
+ * さらに左右の角度差に応じて先行側を減速、遅れ側を増速する。
  */
-#define STRAIGHT_BASE_SPEED  300
-#define STRAIGHT_MIN_SPEED   120
-#define STRAIGHT_MAX_SPEED   360
-#define STRAIGHT_SYNC_GAIN   3
-#define STRAIGHT_UPDATE_US   10000
+#define STRAIGHT_START_SPEED          120
+#define STRAIGHT_CRUISE_SPEED         300
+#define STRAIGHT_END_SPEED            120
+#define STRAIGHT_MIN_SPEED             60
+#define STRAIGHT_MAX_SPEED            330
+#define STRAIGHT_SYNC_GAIN              3
+#define STRAIGHT_SYNC_MAX_CORRECTION   60
+#define STRAIGHT_RAMP_PERCENT          20
+#define STRAIGHT_UPDATE_US          10000
 
 static int32_t clamp_straight_speed(int32_t speed)
 {
     if (speed < STRAIGHT_MIN_SPEED) return STRAIGHT_MIN_SPEED;
     if (speed > STRAIGHT_MAX_SPEED) return STRAIGHT_MAX_SPEED;
     return speed;
+}
+
+/* 走行位置から台形速度プロファイルの基準速度を求める */
+static int32_t straight_profile_speed(int32_t countA,
+                                      int32_t countE,
+                                      int32_t target_angle)
+{
+    int32_t average_progress = (countA + countE) / 2;
+    int32_t leading_progress =
+        (countA > countE) ? countA : countE;
+    int32_t ramp_distance =
+        target_angle * STRAIGHT_RAMP_PERCENT / 100;
+
+    if (ramp_distance < 1) {
+        ramp_distance = 1;
+    }
+    if (average_progress < 0) {
+        average_progress = 0;
+    }
+
+    /* 始動側：走行距離の最初の20%で120→300°/sへ加速 */
+    int32_t acceleration_speed = STRAIGHT_CRUISE_SPEED;
+    if (average_progress < ramp_distance) {
+        acceleration_speed = STRAIGHT_START_SPEED +
+            (STRAIGHT_CRUISE_SPEED - STRAIGHT_START_SPEED) *
+            average_progress / ramp_distance;
+    }
+
+    /* 終了側：先行輪が残り20%に入ったら300→120°/sへ減速 */
+    int32_t remaining = target_angle - leading_progress;
+    if (remaining < 0) {
+        remaining = 0;
+    }
+
+    int32_t deceleration_speed = STRAIGHT_CRUISE_SPEED;
+    if (remaining < ramp_distance) {
+        deceleration_speed = STRAIGHT_END_SPEED +
+            (STRAIGHT_CRUISE_SPEED - STRAIGHT_END_SPEED) *
+            remaining / ramp_distance;
+    }
+
+    /* 加速区間と減速区間が重なる短い走行距離でも安全な低い方を採用 */
+    return (acceleration_speed < deceleration_speed)
+        ? acceleration_speed : deceleration_speed;
 }
 
 /* 直進成功なら1、ストール検知なら0を返す */
@@ -46,10 +96,9 @@ static int drive_straight(pup_motor_t *motorA,
     pup_motor_reset_count(motorA);
     pup_motor_reset_count(motorE);
 
-    /* モータAPIは個別指令なので完全な同時始動ではない。
-       直後からエンコーダ差のフィードバックで始動遅れを補正する。 */
-    pup_motor_set_speed(motorA, STRAIGHT_BASE_SPEED);
-    pup_motor_set_speed(motorE, STRAIGHT_BASE_SPEED);
+    /* 最初から最高速を指令せず、低速で左右の始動差を小さくする */
+    pup_motor_set_speed(motorA, STRAIGHT_START_SPEED);
+    pup_motor_set_speed(motorE, STRAIGHT_START_SPEED);
 
     while (!doneA || !doneE) {
         int32_t countA = pup_motor_get_count(motorA);
@@ -76,14 +125,26 @@ static int drive_straight(pup_motor_t *motorA,
             break;
         }
 
-        /* Aが先行していればAを遅く、Eを速くする。逆なら反対に補正。 */
         {
+            /* 走行位置に応じて基準速度を変化させる */
+            int32_t base_speed =
+                straight_profile_speed(countA, countE, target_angle);
+
+            /* 左右のエンコーダ差を使って始動遅れ・負荷差を補正 */
             int32_t error = countA - countE;
             int32_t correction = error * STRAIGHT_SYNC_GAIN;
-            int32_t speedA = clamp_straight_speed(
-                STRAIGHT_BASE_SPEED - correction);
-            int32_t speedE = clamp_straight_speed(
-                STRAIGHT_BASE_SPEED + correction);
+
+            if (correction > STRAIGHT_SYNC_MAX_CORRECTION) {
+                correction = STRAIGHT_SYNC_MAX_CORRECTION;
+            } else if (correction < -STRAIGHT_SYNC_MAX_CORRECTION) {
+                correction = -STRAIGHT_SYNC_MAX_CORRECTION;
+            }
+
+            /* Aが先行ならAを遅く、Eを速くする。逆なら反対に補正 */
+            int32_t speedA =
+                clamp_straight_speed(base_speed - correction);
+            int32_t speedE =
+                clamp_straight_speed(base_speed + correction);
 
             if (!doneA) {
                 pup_motor_set_speed(motorA, speedA);
