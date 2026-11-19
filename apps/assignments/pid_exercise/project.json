@@ -1,0 +1,6 @@
+{
+  "id": "pid_exercise",
+  "name": "PID Exercise - 2センサーライントレース",
+  "description": "kouhei1970/pid_exerciseを基にした左右カラーセンサーのPIDライントレース。M_S6と同じモーターA/E・回転方向・機体寸法を採用し、カラーセンサーはB/Cへ割り当てています。",
+  "origin": "https://github.com/kouhei1970/pid_exercise"
+}
