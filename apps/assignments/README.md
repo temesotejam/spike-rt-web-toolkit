@@ -158,19 +158,40 @@ The calibration pass has a maximum travel limit and timeout. The CENTER button c
 
 Odometry is relative wheel odometry, not an absolute measurement of the line position. Wheel slip, tire-diameter differences, and an inaccurate track-width value cause drift. Since the line is normally between the two sensors, both sensors being white can mean either a centered line or a line outside the sensor pair; this sensor geometry cannot reliably distinguish those cases by itself. Odometry can predict short-term motion, but it cannot replace a line observation.
 
-### Built-in IMU diagnostics (measurement phase)
+### Built-in IMU and encoder fusion
 
-The program uses the standard `spike/hub/imu.h` API. It retries `hub_imu_init()` while the driver returns `PBIO_ERROR_AGAIN`, then samples the gyro for 100 intervals of 10 ms while the robot is stationary. The mean of each gyro axis is stored as its zero-rate bias; the standard deviation is also logged as a basic noise/stationarity check.
+The program uses the standard `spike/hub/imu.h` API; no IMU or motor driver changes are made. It retries `hub_imu_init()` while the driver returns `PBIO_ERROR_AGAIN`, then samples the gyro for 100 intervals of 10 ms while the robot is stationary. The mean of each gyro axis is stored as its zero-rate bias, and the standard deviation is measured as a basic stationarity/noise check.
 
-During line tracing, acceleration and angular velocity are read in the 10 ms control task. A diagnostic line is written to syslog every 20 control ticks (nominally 5 Hz):
+Fusion is enabled only when IMU initialization succeeds, Z-axis gyro standard deviation is at most 3 deg/s, and the absolute Z-axis bias is at most 8 deg/s. If these checks fail, IMU data is still logged but encoder-only yaw is used.
 
-- acceleration X/Y/Z (API unit: mm/s², multiplied by 10 in the log)
-- bias-corrected gyro X/Y/Z (deg/s, multiplied by 10 in the log)
-- encoder-derived yaw rate (deg/s, multiplied by 10 in the log)
+The SPIKE-RT IMU driver documents a right-handed coordinate system: +X forward, +Y left, and +Z upward. Positive Z angular velocity follows the right-hand rule and corresponds to a left turn when the Hub's documented axes align with the M_S6 robot frame. Verify the sign on the actual robot with a gentle hand rotation before relying on the fused result.
 
-The SPIKE-RT IMU driver documents its right-handed axes as +X forward, +Y left, and +Z upward. For the unchanged M_S6 Hub mounting, Z angular velocity is the candidate yaw-rate signal. Positive Z follows the right-hand rule and should correspond to a left turn. Confirm this on the actual robot by rotating it by hand before relying on the sign.
+#### Fusion method
 
-**Important:** IMU values are diagnostic-only in this version. They do not yet modify PID steering, speed, or odometry. First compare gyro Z against encoder-derived yaw rate in straight runs and gentle turns. Keep the robot stationary during the startup bias measurement. If IMU initialization fails, the program continues with encoder-only control and reports the fallback in syslog.
+The differential-drive encoder yaw rate is calculated from the measured left/right motor speeds and the M_S6 wheel geometry (88 mm wheel diameter, 144 mm track). The gyro yaw rate is corrected by the stationary Z-axis bias.
+
+The initial blend is:
+
+`fused yaw rate = 0.85 × gyro Z + 0.15 × encoder yaw rate`
+
+The same 85/15 weighting is applied to gyro-integrated and encoder-derived heading increments. Fused yaw rate is low-pass filtered with a 50 ms time constant, then used for motion-state classification, adaptive speed, steering damping, and the odometry heading/X/Y integration. Forward distance remains encoder-based.
+
+The 85/15 blend and filter constant are initial engineering values, not tuned values. They must be checked against actual gyro/encoder logs on straight runs and gentle turns. Persistent gyro/encoder disagreement above 35 deg/s for 5 control ticks (nominally 50 ms) generates a warning; it does not automatically change the fusion weights.
+
+#### 5 Hz diagnostics
+
+Every 20 control ticks (nominally 5 Hz), syslog records:
+
+- line state and motion state
+- raw and normalized B/F reflectance, line error, steering output
+- bias-corrected gyro Z, encoder yaw rate, their difference, and fused yaw rate
+- fused heading, relative X/Y, distance, linear speed, and curvature
+- left/right motor commands
+- acceleration X/Y/Z and gyro X/Y (the API returns acceleration in mm/s² and angular velocity in deg/s; logged values are multiplied by 10)
+
+The IMU is read through the standard API in the control task. These calls return the most recently acquired driver data; they do not initiate a new I2C transaction from the application control loop.
+
+**Limitations:** this is relative wheel/gyro odometry, not absolute localization. Wheel slip, unequal effective tire diameters, inaccurate track width, gyro bias drift, and sensor-data age can all cause drift or disagreement. The accelerometer is currently diagnostic-only; it is not double-integrated for position and does not directly change steering. Both color sensors being white still cannot distinguish a centered line between the sensors from a line that has moved completely outside their detection span.
 
 ### Initial tuning values
 
