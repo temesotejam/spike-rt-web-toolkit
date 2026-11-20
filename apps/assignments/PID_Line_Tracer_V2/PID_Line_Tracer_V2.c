@@ -65,7 +65,7 @@
 /* Calibration: robot crosses a transverse black line at low speed. */
 #define CAL_WHITE_SAMPLES       8U
 #define CAL_WHITE_MIN_REFLECT   20
-#define CAL_BLACK_RATIO         0.70f
+#define CAL_BLACK_RATIO         0.85f
 #define CAL_WHITE_AFTER_SAMPLES 8U
 #define CAL_MIN_BLACK_SAMPLES   2U
 #define CAL_MIN_CONTRAST        12.0f
@@ -526,7 +526,7 @@ static calibration_result_t calibrate_across_line(
 
         /* Encoder synchronization keeps the calibration path straight. */
         int32_t correction =
-            (delta_left - delta_right) * CAL_SYNC_GAIN;
+            (travel_left - travel_right) * CAL_SYNC_GAIN;
         correction = clamp_int32(
             correction, -CAL_SYNC_LIMIT, CAL_SYNC_LIMIT);
 
