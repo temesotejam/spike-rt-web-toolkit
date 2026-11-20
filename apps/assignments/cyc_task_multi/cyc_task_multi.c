@@ -301,7 +301,10 @@ void move_task(intptr_t exinf)
 
     syslog(LOG_NOTICE, "MOVE_TASK: square path start");
 
-    for (int side = 0; side < 4; side++) {
+    /* 【変更】4辺を走り終えてもMOVE_TASKを終了せず、
+       次の正方形の1辺目へ戻って無限に繰り返す。 */
+    while (1) {
+      for (int side = 0; side < 4; side++) {
         /* 1辺目～4辺目：左右エンコーダを同期させながら50cm直進 */
         if (!drive_straight(motorA, motorE, straight_angle)) {
             goto motor_stalled;
@@ -321,12 +324,13 @@ void move_task(intptr_t exinf)
 
         pup_motor_brake(motorE);
         dly_tsk(100000);
-    }
+      }
 
-    pup_motor_brake(motorA);
-    pup_motor_brake(motorE);
-    syslog(LOG_NOTICE, "MOVE_TASK: square path completed");
-    ext_tsk();
+      /* 4辺と4回の旋回が完了。停止せず、次の正方形へ進む。 */
+      pup_motor_brake(motorA);
+      pup_motor_brake(motorE);
+      syslog(LOG_NOTICE, "MOVE_TASK: square completed; starting next square");
+    }
 
 motor_stalled:
     syslog(LOG_ERROR, "MOVE_TASK: motor stalled");

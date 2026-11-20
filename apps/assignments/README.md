@@ -16,7 +16,7 @@
 | [PID_Line_Tracer](PID_Line_Tracer/PID_Line_Tracer.c) | 左右2つのカラーセンサー（B/F）の反射光差をPID制御してライントレースします。Cポートのフォースセンサーを1回押すと開始、再度押すと停止します。 |
 | [multi_task1_A](multi_task1_A/multi_task1_A.c) | 元サンプルを基に、SUB_TASKを先に完了させてからMAIN_TASKを実行します。 |
 | [multi_task3](multi_task3/multi_task3.c) | MAIN_TASK、SUB_TASK1_A、SUB_TASK2の3タスクがセマフォで実行権を渡しながらカウントします。 |
-| [cyc_task_multi](cyc_task_multi/cyc_task_multi.c) | スター・ウォーズ再生、1秒ごとのLCDカウント、50cm四方の走行を3タスクで並列実行します。 |
+| [cyc_task_multi](cyc_task_multi/cyc_task_multi.c) | スター・ウォーズ再生、1秒ごとのLCDカウント、50cm四方の経路をMOVE_TASKが無限に繰り返し走行する3タスク並列プログラムです。 |
 | [cyc_task_realtime](cyc_task_realtime/cyc_task_realtime.c) | Dポートのカラーセンサーで蓋の開閉を監視し、開くと演奏、閉じると停止します。環境光／反射光を切り替えられます。 |
 
 ## サンプルから課題を作る
