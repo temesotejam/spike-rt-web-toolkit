@@ -105,6 +105,7 @@
 #define ODOM_YAW_RATE_THRESHOLD  8.0f
 #define ODOM_YAW_RATE_FULL       60.0f
 #define ODOM_YAW_DAMPING_GAIN    0.15f
+#define ODOM_YAW_FILTER_TAU_S    0.050f
 
 /* Normalized reflectance state thresholds (black=0, white=100). */
 #define LINE_DARK_THRESHOLD      45.0f
@@ -301,18 +302,40 @@ static void update_odometry(
         odometry->heading_rad += 2.0f * ODOM_PI;
     }
 
+    /* Use the motor API's encoder-derived speed estimate for velocity.
+     * This is less quantized than differentiating integer-degree counts
+     * over a single 10 ms control interval. */
+    const float left_speed_mm_s =
+        (float)pup_motor_get_speed(motor_left) * mm_per_degree;
+    const float right_speed_mm_s =
+        (float)pup_motor_get_speed(motor_right) * mm_per_degree;
+
     if (dt > 0.0f) {
-        odometry->linear_speed_mm_s = delta_distance / dt;
-        odometry->yaw_rate_deg_s =
-            (delta_heading * ODOM_RAD_TO_DEG) / dt;
+        odometry->linear_speed_mm_s =
+            (left_speed_mm_s + right_speed_mm_s) * 0.5f;
+
+        const float yaw_rate_raw =
+            ((right_speed_mm_s - left_speed_mm_s) / WHEEL_TRACK_MM) *
+            ODOM_RAD_TO_DEG;
+
+        const float filter_alpha =
+            dt / (ODOM_YAW_FILTER_TAU_S + dt);
+
+        odometry->yaw_rate_deg_s +=
+            filter_alpha * (yaw_rate_raw - odometry->yaw_rate_deg_s);
     } else {
         odometry->linear_speed_mm_s = 0.0f;
         odometry->yaw_rate_deg_s = 0.0f;
     }
 
-    if (fabsf(delta_distance) > 0.1f) {
+    const float linear_speed_m_s =
+        odometry->linear_speed_mm_s / 1000.0f;
+
+    if (fabsf(linear_speed_m_s) > 0.005f) {
+        const float yaw_rate_rad_s =
+            odometry->yaw_rate_deg_s / ODOM_RAD_TO_DEG;
         odometry->curvature_per_m =
-            (delta_heading / delta_distance) * 1000.0f;
+            yaw_rate_rad_s / linear_speed_m_s;
     } else {
         odometry->curvature_per_m = 0.0f;
     }
@@ -1090,7 +1113,7 @@ void Main(intptr_t exinf)
             saved_calibration.white_right
         );
 
-        /* Positive error means the left sensor is darker than the right:
+        /* Negative error means the left sensor is darker than the right:
          * the line is under the left sensor and the robot should steer left. */
         float error = normalized_left - normalized_right;
         const line_state_t line_state =
