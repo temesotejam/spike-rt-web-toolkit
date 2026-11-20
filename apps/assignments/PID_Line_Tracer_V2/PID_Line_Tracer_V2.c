@@ -30,6 +30,9 @@
  *   - Per-sensor reflectance normalization.
  *   - Filtered derivative and conditional integral anti-windup.
  *   - Adaptive base speed and bounded wheel commands.
+ *   - Built-in IMU initialization, stationary gyro-bias calibration,
+ *     and 5 Hz diagnostic logging for comparison with encoder yaw rate.
+ *   - IMU data is diagnostic-only in this phase; it does not yet alter PID.
  */
 
 #include <kernel.h>

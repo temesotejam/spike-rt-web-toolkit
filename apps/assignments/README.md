@@ -14,7 +14,7 @@
 | [DC_S2](DC_S2/DC_S2.c) | Eポートの超音波センサーで距離を測り、中央ボタンのライトを250mm未満で赤、250mm以上500mm未満で黄、500mm以上で青にします。LCDには「Red／Yellow／Blue」を1文字ずつ繰り返し表示します。計測エラー時はライトを消灯し、LCDに「Err」を表示します。距離の数値はシリアルモニタに出力します。 |
 | [M_S6](M_S6/M_S6.c) | 左右ボタンで円・正方形を選び、中央ボタンで決定すると走行します。正方形の直進では左右エンコーダ差をフィードバック補正し、両輪の目標回転量をそろえます。 |
 | [PID_Line_Tracer](PID_Line_Tracer/PID_Line_Tracer.c) | 左右2つのカラーセンサー（B/F）の反射光差をPID制御してライントレースします。Cポートのフォースセンサーを1回押すと開始、再度押すと停止します。 |
-| [PID_Line_Tracer_V2](PID_Line_Tracer_V2/PID_Line_Tracer_V2.c) | 起動時にHubの左右ボタンでライントレース／校正を選択。校正では白→黒→白の横切り走行で左右センサーを個別校正し、成功後はモード選択へ戻ります。標準SPIKE-RT APIのみを使用します。 |
+| [PID_Line_Tracer_V2](PID_Line_Tracer_V2/PID_Line_Tracer_V2.c) | 起動時にHubの左右ボタンでライントレース／校正を選択。白→黒→白の横切り校正、左右センサー個別補正、ライン状態分類、エンコーダオドメトリに加え、内蔵IMUの3軸データとエンコーダ旋回速度を比較ログ出力します。IMUは現段階では診断専用で操舵には未使用です。 |
 | [multi_task1_A](multi_task1_A/multi_task1_A.c) | 元サンプルを基に、SUB_TASKを先に完了させてからMAIN_TASKを実行します。 |
 | [multi_task3](multi_task3/multi_task3.c) | MAIN_TASK、SUB_TASK1_A、SUB_TASK2の3タスクがセマフォで実行権を渡しながらカウントします。 |
 | [cyc_task_multi](cyc_task_multi/cyc_task_multi.c) | スター・ウォーズ再生、1秒ごとのLCDカウント、50cm四方の経路をMOVE_TASKが無限に繰り返し走行する3タスク並列プログラムです。 |
@@ -157,6 +157,20 @@ The calibration pass has a maximum travel limit and timeout. The CENTER button c
 10. **Start/stop input:** force sensor C toggles line-tracing operation. Three consecutive 10ms samples are required for a press or release, preventing repeated toggles while the sensor is held.
 
 Odometry is relative wheel odometry, not an absolute measurement of the line position. Wheel slip, tire-diameter differences, and an inaccurate track-width value cause drift. Since the line is normally between the two sensors, both sensors being white can mean either a centered line or a line outside the sensor pair; this sensor geometry cannot reliably distinguish those cases by itself. Odometry can predict short-term motion, but it cannot replace a line observation.
+
+### Built-in IMU diagnostics (measurement phase)
+
+The program uses the standard `spike/hub/imu.h` API. It retries `hub_imu_init()` while the driver returns `PBIO_ERROR_AGAIN`, then samples the gyro for 100 intervals of 10 ms while the robot is stationary. The mean of each gyro axis is stored as its zero-rate bias; the standard deviation is also logged as a basic noise/stationarity check.
+
+During line tracing, acceleration and angular velocity are read in the 10 ms control task. A diagnostic line is written to syslog every 20 control ticks (nominally 5 Hz):
+
+- acceleration X/Y/Z (API unit: mm/s², multiplied by 10 in the log)
+- bias-corrected gyro X/Y/Z (deg/s, multiplied by 10 in the log)
+- encoder-derived yaw rate (deg/s, multiplied by 10 in the log)
+
+The SPIKE-RT IMU driver documents its right-handed axes as +X forward, +Y left, and +Z upward. For the unchanged M_S6 Hub mounting, Z angular velocity is the candidate yaw-rate signal. Positive Z follows the right-hand rule and should correspond to a left turn. Confirm this on the actual robot by rotating it by hand before relying on the sign.
+
+**Important:** IMU values are diagnostic-only in this version. They do not yet modify PID steering, speed, or odometry. First compare gyro Z against encoder-derived yaw rate in straight runs and gentle turns. Keep the robot stationary during the startup bias measurement. If IMU initialization fails, the program continues with encoder-only control and reports the fallback in syslog.
 
 ### Initial tuning values
 
