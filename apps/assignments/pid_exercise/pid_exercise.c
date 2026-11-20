@@ -114,7 +114,7 @@ void Main(intptr_t exinf)
         pup_color_sensor_get_device(RIGHT_COLOR_SENSOR);
 
     if (color_sensor_left == NULL || color_sensor_right == NULL) {
-        syslog(LOG_ERROR, "PID: color sensor not found (B/C)");
+        syslog(LOG_ERROR, "PID: color sensor not found (B/F)");
         pup_motor_stop(motor_left);
         pup_motor_stop(motor_right);
         ext_tsk();
