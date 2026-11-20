@@ -10,11 +10,14 @@
  * 2. 左右モーターを正方形走行プログラム M_S6 と同じA/Eポートへ変更。
  * 3. モーター初期化をSPIKE-RT v0.2.0の
  *    pup_motor_get_device() + pup_motor_setup() に変更。
- * 4. A/Eをモーターに使うため、カラーセンサーをB/Cポートへ変更。
+ * 4. A/Eをモーターに使うため、カラーセンサーをB/Fポートへ変更。
+ * 5. Cポートにフォースセンサーを追加。1回押すと開始、再度押すと停止。
  *
  * 機体仕様はM_S6に合わせる：
  *   左モーター A（反時計回り）
  *   右モーター E（時計回り）
+ *   左カラーセンサー B、右カラーセンサー F
+ *   フォースセンサー C（開始／停止）
  *   タイヤ直径 88mm、トレッド 144mm
  *
  * PIDの出力は左右の車輪速度 [deg/s] に反映する。
@@ -22,6 +25,7 @@
  */
 #include <kernel.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <t_syslog.h>
 
 #include "pid_exercise.h"
@@ -29,6 +33,7 @@
 
 #include "spike/pup/motor.h"
 #include "spike/pup/colorsensor.h"
+#include "spike/pup/forcesensor.h"  /* 追加：Cポートの開始・停止ボタン */
 #include "spike/hub/speaker.h"
 
 /*------------------------------------------------------------
@@ -36,10 +41,11 @@
  *
  * 元プログラム：センサーA/B、モーターC/D
  * 今回の機体  ：モーターA/EをM_S6と共通化し、
- *                センサーをB/Cへ移動
+ *                センサーをB/Fへ移動。Cにはフォースセンサーを接続
  *-----------------------------------------------------------*/
 #define LEFT_COLOR_SENSOR   PBIO_PORT_ID_B
-#define RIGHT_COLOR_SENSOR  PBIO_PORT_ID_C
+#define RIGHT_COLOR_SENSOR  PBIO_PORT_ID_F
+#define START_STOP_SENSOR   PBIO_PORT_ID_C
 #define LEFT_MOTOR           PBIO_PORT_ID_A
 #define RIGHT_MOTOR          PBIO_PORT_ID_E
 
@@ -48,6 +54,7 @@
 #define MV_MAX              100.0f    /* 操作量の上限 */
 #define CONTROL_PERIOD_MS   10
 #define CONTROL_PERIOD_US   (CONTROL_PERIOD_MS * 1000)
+#define BUTTON_DEBOUNCE_SAMPLES 2 /* 10ms×2回連続で押下／解放を確定 */
 
 static const float kp = 1.0f;   /* 比例ゲイン */
 static const float ki = 0.1f;   /* 積分ゲイン */
@@ -106,7 +113,7 @@ void Main(intptr_t exinf)
     /*--------------------------------------------------------
      * カラーセンサー初期化
      *
-     * 【変更】モーターA/Eと重ならないB/Cポートを使用する。
+     * 【変更】モーターA/Eと重ならないB/Fポートを使用する。
      *-------------------------------------------------------*/
     pup_device_t *color_sensor_left =
         pup_color_sensor_get_device(LEFT_COLOR_SENSOR);
@@ -114,22 +121,43 @@ void Main(intptr_t exinf)
         pup_color_sensor_get_device(RIGHT_COLOR_SENSOR);
 
     if (color_sensor_left == NULL || color_sensor_right == NULL) {
-        syslog(LOG_ERROR, "PID: color sensor not found (B/C)");
+        syslog(LOG_ERROR, "PID: color sensor not found (B/F)");
+        pup_motor_stop(motor_left);
+        pup_motor_stop(motor_right);
+        ext_tsk();
+    }
+
+    /*--------------------------------------------------------
+     * 【追加】フォースセンサーの初期化
+     * Cポートに接続。押下はpup_force_sensor_touched()で検知する。
+     * センサーがない場合はモーターを動かさずに終了。
+     *-------------------------------------------------------*/
+    pup_device_t *start_stop_sensor =
+        pup_force_sensor_get_device(START_STOP_SENSOR);
+    if (start_stop_sensor == NULL) {
+        syslog(LOG_ERROR, "PID: force sensor not found (C)");
         pup_motor_stop(motor_left);
         pup_motor_stop(motor_right);
         ext_tsk();
     }
 
     syslog(LOG_NOTICE,
-           "PID exercise: motors A/E, color sensors B/C");
+           "PID exercise: motors A/E, color sensors B/F, force C");
 
     /* 元プログラムと同じ初期待機（3秒） */
     dly_tsk(3000000);
 
-    /* 走行開始の合図 */
+    /* 元プログラムの合図音は、ここでは走行開始ではなく操作受付の合図。 */
     hub_speaker_set_volume(100);
     hub_speaker_play_tone(695, 200);
     dly_tsk(200000);
+
+    /* 【追加】初期状態は停止。Cポートを押すまで走り出さない。 */
+    bool running = false;
+    bool press_armed = true;
+    unsigned int pressed_samples = 0;
+    unsigned int released_samples = 0;
+    syslog(LOG_NOTICE, "PID: ready. Press force sensor C to start.");
 
     /*--------------------------------------------------------
      * PID制御ループ
@@ -138,6 +166,60 @@ void Main(intptr_t exinf)
      * モーター速度の出力先だけをA/Eへ変更している。
      *-------------------------------------------------------*/
     while (1) {
+        /*----------------------------------------------------
+         * 【追加】フォースセンサーで走行／停止を切り替える
+         * ・押下を2回連続確認したときだけ1回の操作として扱う。
+         * ・次の操作は、センサーを2回連続で離してから受け付ける。
+         * ・停止時は直ちに左右のモーターをブレーキする。
+         *   押しっぱなしによる連続切り替えは発生しない。
+         *---------------------------------------------------*/
+        bool touched = pup_force_sensor_touched(start_stop_sensor);
+
+        if (press_armed) {
+            if (touched) {
+                pressed_samples++;
+                if (pressed_samples >= BUTTON_DEBOUNCE_SAMPLES) {
+                    press_armed = false;
+                    pressed_samples = 0;
+                    released_samples = 0;
+
+                    if (running) {
+                        /* 走行中の押下で停止。PID値もリセット。 */
+                        running = false;
+                        pup_motor_brake(motor_left);
+                        pup_motor_brake(motor_right);
+                        integral = 0.0f;
+                        last_error = 0.0f;
+                        syslog(LOG_NOTICE, "PID: stopped by force sensor C");
+                    } else {
+                        /* 停止中の押下で再開。古い積分値を引き継がない。 */
+                        integral = 0.0f;
+                        last_error = 0.0f;
+                        running = true;
+                        syslog(LOG_NOTICE, "PID: started by force sensor C");
+                    }
+                }
+            } else {
+                pressed_samples = 0;
+            }
+        } else {
+            if (!touched) {
+                released_samples++;
+                if (released_samples >= BUTTON_DEBOUNCE_SAMPLES) {
+                    press_armed = true;
+                    released_samples = 0;
+                }
+            } else {
+                released_samples = 0;
+            }
+        }
+
+        /* 停止中はPID演算も速度指令もしない。ボタン監視だけ継続。 */
+        if (!running) {
+            dly_tsk(CONTROL_PERIOD_US);
+            continue;
+        }
+
         /* 1. 左右カラーセンサーの反射光を取得 */
         reflection_left =
             pup_color_sensor_reflection(color_sensor_left);

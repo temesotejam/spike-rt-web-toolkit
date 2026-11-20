@@ -1,6 +1,6 @@
 {
   "id": "pid_exercise",
   "name": "PID Line Tracer",
-  "description": "左右2つのカラーセンサーの反射光差をPID制御し、ラインを追従するプログラム。M_S6と同じモーターA/E・回転方向を採用し、カラーセンサーはB/Cへ接続します。",
+  "description": "Two-color-sensor PID line tracer for the M_S6 driving base. Left motor A, right motor E, left color sensor B, right color sensor F, force sensor C to toggle start/stop.",
   "origin": "https://github.com/kouhei1970/pid_exercise"
 }
