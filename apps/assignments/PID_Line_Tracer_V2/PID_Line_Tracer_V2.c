@@ -1257,13 +1257,10 @@ void Main(intptr_t exinf)
             }
         }
 
-        if (!running) {
-            continue;
-        }
-
         /* Read the latest cached IMU sample. The standard SPIKE-RT API
          * returns the most recently acquired driver data; it does not start
-         * a new I2C transaction from this control task. */
+         * a new I2C transaction from this control task. Read it while idle
+         * too, so stationary gyro behavior can be inspected before starting. */
         float acceleration[3] = {0.0f, 0.0f, 0.0f};
         float angular_velocity[3] = {0.0f, 0.0f, 0.0f};
         float gyro_z_corrected = 0.0f;
@@ -1280,8 +1277,8 @@ void Main(intptr_t exinf)
         }
 
         /* Update wheel odometry and fuse encoder yaw with the bias-corrected
-         * IMU Z gyro. If IMU initialization failed, encoder-only odometry
-         * remains available. */
+         * IMU Z gyro. If IMU initialization or its stationary quality check
+         * failed, encoder-only odometry remains available. */
         update_odometry(
             &odometry,
             motor_left,
@@ -1316,6 +1313,25 @@ void Main(intptr_t exinf)
 
         const motion_state_t motion_state =
             classify_motion(odometry.yaw_rate_deg_s);
+
+        if (!running) {
+            /* Idle diagnostics allow a stationary test and a hand-rotation
+             * sign check without commanding either motor. */
+            imu_log_ticks++;
+            if (imu_log_ticks >= IMU_LOG_INTERVAL_TICKS) {
+                imu_log_ticks = 0;
+                syslog(LOG_NOTICE,
+                       "IDLE IMU=%d USE=%d GZx10=%ld EZx10=%ld DIFFx10=%ld FZx10=%ld ACCZx10=%ld",
+                       imu_available ? 1 : 0,
+                       imu_fusion_enabled ? 1 : 0,
+                       (long)(odometry.gyro_yaw_rate_deg_s * 10.0f),
+                       (long)(odometry.encoder_yaw_rate_deg_s * 10.0f),
+                       (long)(odometry.yaw_rate_difference_deg_s * 10.0f),
+                       (long)(odometry.yaw_rate_deg_s * 10.0f),
+                       (long)(acceleration[2] * 10.0f));
+            }
+            continue;
+        }
 
         const int32_t reflection_left =
             pup_color_sensor_reflection(sensor_left);
