@@ -10,7 +10,7 @@
  * 2. 左右モーターを正方形走行プログラム M_S6 と同じA/Eポートへ変更。
  * 3. モーター初期化をSPIKE-RT v0.2.0の
  *    pup_motor_get_device() + pup_motor_setup() に変更。
- * 4. A/Eをモーターに使うため、カラーセンサーをB/Fポートへ変更。
+ * 4. A/Eをモーターに使うため、カラーセンサーをB/Cポートへ変更。
  *
  * 機体仕様はM_S6に合わせる：
  *   左モーター A（反時計回り）
@@ -36,10 +36,10 @@
  *
  * 元プログラム：センサーA/B、モーターC/D
  * 今回の機体  ：モーターA/EをM_S6と共通化し、
- *                センサーをB/Fへ移動
+ *                センサーをB/Cへ移動
  *-----------------------------------------------------------*/
 #define LEFT_COLOR_SENSOR   PBIO_PORT_ID_B
-#define RIGHT_COLOR_SENSOR  PBIO_PORT_ID_F
+#define RIGHT_COLOR_SENSOR  PBIO_PORT_ID_C
 #define LEFT_MOTOR           PBIO_PORT_ID_A
 #define RIGHT_MOTOR          PBIO_PORT_ID_E
 
@@ -106,7 +106,7 @@ void Main(intptr_t exinf)
     /*--------------------------------------------------------
      * カラーセンサー初期化
      *
-     * 【変更】モーターA/Eと重ならないB/Fポートを使用する。
+     * 【変更】モーターA/Eと重ならないB/Cポートを使用する。
      *-------------------------------------------------------*/
     pup_device_t *color_sensor_left =
         pup_color_sensor_get_device(LEFT_COLOR_SENSOR);
@@ -114,14 +114,14 @@ void Main(intptr_t exinf)
         pup_color_sensor_get_device(RIGHT_COLOR_SENSOR);
 
     if (color_sensor_left == NULL || color_sensor_right == NULL) {
-        syslog(LOG_ERROR, "PID: color sensor not found (B/F)");
+        syslog(LOG_ERROR, "PID: color sensor not found (B/C)");
         pup_motor_stop(motor_left);
         pup_motor_stop(motor_right);
         ext_tsk();
     }
 
     syslog(LOG_NOTICE,
-           "PID exercise: motors A/E, color sensors B/F");
+           "PID exercise: motors A/E, color sensors B/C");
 
     /* 元プログラムと同じ初期待機（3秒） */
     dly_tsk(3000000);

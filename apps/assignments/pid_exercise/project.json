@@ -1,6 +1,6 @@
 {
   "id": "pid_exercise",
   "name": "PID Line Tracer",
-  "description": "左右2つのカラーセンサーの反射光差をPID制御し、ラインを追従するプログラム。M_S6と同じモーターA/E・回転方向を採用し、カラーセンサーはB/Fへ接続します。",
+  "description": "左右2つのカラーセンサーの反射光差をPID制御し、ラインを追従するプログラム。M_S6と同じモーターA/E・回転方向を採用し、カラーセンサーはB/Cへ接続します。",
   "origin": "https://github.com/kouhei1970/pid_exercise"
 }
