@@ -750,7 +750,6 @@ void Main(intptr_t exinf)
     }
 
     hub_display_char('L');
-    hub_speaker_play_tone(695, 150);
 
     bool running = false;
     bool button_armed = !pup_force_sensor_touched(start_stop_sensor);
