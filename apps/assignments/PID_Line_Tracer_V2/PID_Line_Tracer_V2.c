@@ -1121,6 +1121,13 @@ void Main(intptr_t exinf)
         int32_t base_speed = calculate_base_speed(
             abs_error, fabsf(odometry.yaw_rate_deg_s));
 
+        /* Any measured turn reduces the straight-line speed ceiling slightly.
+         * A stronger line error or yaw rate can reduce it further below. */
+        if (motion_state != MOTION_STATE_STRAIGHT &&
+            base_speed > BASE_SPEED_STRAIGHT - 15) {
+            base_speed = BASE_SPEED_STRAIGHT - 15;
+        }
+
         /* Slow down for ambiguous transitions and wide-line/crossing states. */
         if (line_state == LINE_STATE_BOTH_DARK &&
             base_speed > LINE_BOTH_DARK_MAX_SPEED) {
@@ -1193,9 +1200,6 @@ void Main(intptr_t exinf)
             );
         }
 
-        /* Keep the motion-state classification explicit for diagnostics
-         * and future state-specific tuning. */
-        (void)motion_state;
 
         int32_t left_speed =
             (int32_t)((float)base_speed + steering + 0.5f);

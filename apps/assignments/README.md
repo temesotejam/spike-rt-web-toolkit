@@ -148,10 +148,15 @@ The calibration pass has a maximum travel limit and timeout. The CENTER button c
 1. **Periodic control wake-up:** a 10ms cyclic handler releases a binary semaphore. The control task waits on that semaphore instead of adding a relative 10ms delay after every calculation.
 2. **Measured elapsed time:** `fch_hrt()` measures the actual interval between control iterations. The PID derivative and integral use this measured interval, with bounds for abnormal delays.
 3. **Per-sensor calibration:** the moving calibration measures white and black reflectance independently for sensors B and F. Each sensor is normalized to a common 0..100 scale (black=0, white=100), compensating for sensor-to-sensor differences.
-4. **Filtered derivative:** a first-order low-pass filter reduces derivative spikes caused by reflection noise.
-5. **Conditional integral anti-windup:** the integral term is not accumulated when it would push an already saturated steering output further into saturation.
-6. **Adaptive speed:** the base wheel speed decreases as the absolute line-position error grows. Both wheel commands are limited to the configured range.
-7. **Start/stop input:** force sensor C toggles line-tracing operation. Three consecutive 10ms samples are required for a press or release, preventing repeated toggles while the sensor is held.
+4. **Line-state classification:** normalized readings classify the pair as centered, left sensor over the line, right sensor over the line, both sensors dark (wide line/crossing), or transition. Both-dark holds the previous steering direction and slows down; transition also limits speed.
+5. **Wheel-encoder odometry:** encoder angle increments from motors A/E are converted to wheel travel using the M_S6 assumptions (88 mm wheel diameter, 144 mm track). The program integrates relative X/Y, heading, distance, linear speed, yaw rate, and curvature.
+6. **Odometry-assisted steering:** measured yaw rate provides a conservative damping term, and measured turning reduces the speed ceiling. Color sensors remain the primary line-position feedback.
+7. **Filtered derivative:** a first-order low-pass filter reduces derivative spikes caused by reflection noise.
+8. **Conditional integral anti-windup:** the integral term is not accumulated when it would push an already saturated steering output further into saturation.
+9. **Adaptive speed:** the base wheel speed decreases as line-position error or measured yaw rate grows. Both wheel commands are limited to the configured range.
+10. **Start/stop input:** force sensor C toggles line-tracing operation. Three consecutive 10ms samples are required for a press or release, preventing repeated toggles while the sensor is held.
+
+Odometry is relative wheel odometry, not an absolute measurement of the line position. Wheel slip, tire-diameter differences, and an inaccurate track-width value cause drift. Since the line is normally between the two sensors, both sensors being white can mean either a centered line or a line outside the sensor pair; this sensor geometry cannot reliably distinguish those cases by itself. Odometry can predict short-term motion, but it cannot replace a line observation.
 
 ### Initial tuning values
 
