@@ -35,6 +35,7 @@
 #include <kernel.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 #include <t_syslog.h>
 
 #include "PID_Line_Tracer_V2.h"
@@ -96,6 +97,23 @@
 #define MAX_WHEEL_SPEED         200
 #define MAX_STEERING            100.0f
 
+/* Differential-drive odometry geometry: M_S6 wheelbase configuration. */
+#define ODOM_PI                  3.14159265f
+#define WHEEL_DIAMETER_MM        88.0f
+#define WHEEL_TRACK_MM           144.0f
+#define ODOM_RAD_TO_DEG          57.2957795f
+#define ODOM_YAW_RATE_THRESHOLD  8.0f
+#define ODOM_YAW_RATE_FULL       60.0f
+#define ODOM_YAW_DAMPING_GAIN    0.15f
+
+/* Normalized reflectance state thresholds (black=0, white=100). */
+#define LINE_DARK_THRESHOLD      45.0f
+#define LINE_WHITE_THRESHOLD     70.0f
+#define LINE_CENTER_DIFF         12.0f
+#define LINE_CENTER_DEADBAND     4.0f
+#define LINE_BOTH_DARK_MAX_SPEED 65
+#define LINE_TRANSITION_MAX_SPEED 95
+
 typedef enum {
     MODE_LINE_TRACE = 0,
     MODE_CALIBRATION = 1
@@ -131,6 +149,33 @@ typedef struct {
     float black_right;
     bool valid;
 } line_calibration_t;
+
+typedef enum {
+    LINE_STATE_CENTERED = 0,
+    LINE_STATE_LEFT_EDGE,
+    LINE_STATE_RIGHT_EDGE,
+    LINE_STATE_BOTH_DARK,
+    LINE_STATE_TRANSITION
+} line_state_t;
+
+typedef enum {
+    MOTION_STATE_STRAIGHT = 0,
+    MOTION_STATE_TURNING_LEFT,
+    MOTION_STATE_TURNING_RIGHT
+} motion_state_t;
+
+typedef struct {
+    int32_t previous_left_count;
+    int32_t previous_right_count;
+    float x_mm;
+    float y_mm;
+    float heading_rad;
+    float distance_mm;
+    float linear_speed_mm_s;
+    float yaw_rate_deg_s;
+    float curvature_per_m;
+    bool initialized;
+} odometry_t;
 
 static volatile uint32_t control_tick_overruns = 0;
 static line_calibration_t saved_calibration = {0};
@@ -168,15 +213,153 @@ static int32_t clamp_speed(int32_t value)
     return clamp_int32(value, MIN_WHEEL_SPEED, MAX_WHEEL_SPEED);
 }
 
-/* Reduce forward speed when the normalized line-position error grows. */
-static int32_t calculate_base_speed(float abs_error)
+/* Reduce forward speed for either large line error or high measured
+ * yaw rate. The odometry term is deliberately conservative. */
+static int32_t calculate_base_speed(float abs_error, float abs_yaw_rate)
 {
-    float ratio = clamp_float(abs_error / SLOWDOWN_ERROR, 0.0f, 1.0f);
+    const float error_ratio =
+        clamp_float(abs_error / SLOWDOWN_ERROR, 0.0f, 1.0f);
+    const float yaw_ratio =
+        clamp_float(abs_yaw_rate / ODOM_YAW_RATE_FULL, 0.0f, 1.0f);
+    const float ratio =
+        error_ratio > yaw_ratio ? error_ratio : yaw_ratio;
 
     return (int32_t)(
         (float)BASE_SPEED_STRAIGHT -
         ratio * (float)(BASE_SPEED_STRAIGHT - BASE_SPEED_TURN) + 0.5f
     );
+}
+
+/* Reset the relative odometry origin at the beginning of each run. */
+static void reset_odometry(odometry_t *odometry)
+{
+    odometry->previous_left_count = 0;
+    odometry->previous_right_count = 0;
+    odometry->x_mm = 0.0f;
+    odometry->y_mm = 0.0f;
+    odometry->heading_rad = 0.0f;
+    odometry->distance_mm = 0.0f;
+    odometry->linear_speed_mm_s = 0.0f;
+    odometry->yaw_rate_deg_s = 0.0f;
+    odometry->curvature_per_m = 0.0f;
+    odometry->initialized = false;
+}
+
+/* Differential-drive odometry from the standard motor encoder API.
+ * pup_motor_setup() defines each motor's positive direction as forward,
+ * so both encoder increments are positive during straight forward motion. */
+static void update_odometry(
+    odometry_t *odometry,
+    pup_motor_t *motor_left,
+    pup_motor_t *motor_right,
+    float dt)
+{
+    const int32_t left_count = pup_motor_get_count(motor_left);
+    const int32_t right_count = pup_motor_get_count(motor_right);
+
+    if (!odometry->initialized) {
+        odometry->previous_left_count = left_count;
+        odometry->previous_right_count = right_count;
+        odometry->linear_speed_mm_s = 0.0f;
+        odometry->yaw_rate_deg_s = 0.0f;
+        odometry->curvature_per_m = 0.0f;
+        odometry->initialized = true;
+        return;
+    }
+
+    const int32_t delta_left_deg =
+        left_count - odometry->previous_left_count;
+    const int32_t delta_right_deg =
+        right_count - odometry->previous_right_count;
+
+    odometry->previous_left_count = left_count;
+    odometry->previous_right_count = right_count;
+
+    const float mm_per_degree =
+        (ODOM_PI * WHEEL_DIAMETER_MM) / 360.0f;
+    const float delta_left_mm =
+        (float)delta_left_deg * mm_per_degree;
+    const float delta_right_mm =
+        (float)delta_right_deg * mm_per_degree;
+
+    const float delta_distance =
+        (delta_left_mm + delta_right_mm) * 0.5f;
+    const float delta_heading =
+        (delta_right_mm - delta_left_mm) / WHEEL_TRACK_MM;
+    const float midpoint_heading =
+        odometry->heading_rad + delta_heading * 0.5f;
+
+    odometry->x_mm += delta_distance * cosf(midpoint_heading);
+    odometry->y_mm += delta_distance * sinf(midpoint_heading);
+    odometry->distance_mm += delta_distance;
+    odometry->heading_rad += delta_heading;
+
+    while (odometry->heading_rad > ODOM_PI) {
+        odometry->heading_rad -= 2.0f * ODOM_PI;
+    }
+    while (odometry->heading_rad < -ODOM_PI) {
+        odometry->heading_rad += 2.0f * ODOM_PI;
+    }
+
+    if (dt > 0.0f) {
+        odometry->linear_speed_mm_s = delta_distance / dt;
+        odometry->yaw_rate_deg_s =
+            (delta_heading * ODOM_RAD_TO_DEG) / dt;
+    } else {
+        odometry->linear_speed_mm_s = 0.0f;
+        odometry->yaw_rate_deg_s = 0.0f;
+    }
+
+    if (fabsf(delta_distance) > 0.1f) {
+        odometry->curvature_per_m =
+            (delta_heading / delta_distance) * 1000.0f;
+    } else {
+        odometry->curvature_per_m = 0.0f;
+    }
+}
+
+/* Classify the actual wheel motion estimated from encoder odometry.
+ * Positive yaw rate means a left turn; negative means a right turn. */
+static motion_state_t classify_motion(float yaw_rate_deg_s)
+{
+    if (yaw_rate_deg_s > ODOM_YAW_RATE_THRESHOLD) {
+        return MOTION_STATE_TURNING_LEFT;
+    }
+    if (yaw_rate_deg_s < -ODOM_YAW_RATE_THRESHOLD) {
+        return MOTION_STATE_TURNING_RIGHT;
+    }
+    return MOTION_STATE_STRAIGHT;
+}
+
+/* The two sensors straddle the line: centered normally means both are
+ * white and balanced. A dark left/right sensor identifies which side of
+ * the line has moved under the sensor. Both-dark is treated as a crossing
+ * or unusually wide line, not as a reliable left/right position cue. */
+static line_state_t classify_line_state(
+    float normalized_left,
+    float normalized_right,
+    float error)
+{
+    const bool left_dark = normalized_left <= LINE_DARK_THRESHOLD;
+    const bool right_dark = normalized_right <= LINE_DARK_THRESHOLD;
+    const bool left_white = normalized_left >= LINE_WHITE_THRESHOLD;
+    const bool right_white = normalized_right >= LINE_WHITE_THRESHOLD;
+
+    if (left_dark && right_dark) {
+        return LINE_STATE_BOTH_DARK;
+    }
+    if (left_dark && right_white) {
+        return LINE_STATE_LEFT_EDGE;
+    }
+    if (right_dark && left_white) {
+        return LINE_STATE_RIGHT_EDGE;
+    }
+    if (left_white && right_white &&
+        fabsf(error) <= LINE_CENTER_DIFF) {
+        return LINE_STATE_CENTERED;
+    }
+
+    return LINE_STATE_TRANSITION;
 }
 
 /* The hub API returns a bitmask of all currently pressed built-in buttons. */
@@ -763,6 +946,9 @@ void Main(intptr_t exinf)
     float integral = 0.0f;
     float last_error = 0.0f;
     float derivative_filtered = 0.0f;
+    float last_steering = 0.0f;
+
+    odometry_t odometry = {0};
 
     uint32_t last_tick_hrt = 0;
     bool have_last_tick = false;
@@ -827,17 +1013,25 @@ void Main(intptr_t exinf)
                         integral = 0.0f;
                         last_error = 0.0f;
                         derivative_filtered = 0.0f;
+                        last_steering = 0.0f;
                         pid_initialized = false;
 
                         syslog(LOG_NOTICE,
-                               "PID V2: stopped by force sensor C");
+                               "PID V2: stopped by force sensor C; "
+                               "ODO D=%ld X=%ld Y=%ld H=%ld",
+                               (long)odometry.distance_mm,
+                               (long)odometry.x_mm,
+                               (long)odometry.y_mm,
+                               (long)(odometry.heading_rad * ODOM_RAD_TO_DEG));
                     } else {
                         running = true;
 
                         integral = 0.0f;
                         last_error = 0.0f;
                         derivative_filtered = 0.0f;
+                        last_steering = 0.0f;
                         pid_initialized = false;
+                        reset_odometry(&odometry);
 
                         syslog(LOG_NOTICE,
                                "PID V2: started by force sensor C");
@@ -862,6 +1056,11 @@ void Main(intptr_t exinf)
         if (!running) {
             continue;
         }
+
+        /* Update wheel odometry before computing the current control output. */
+        update_odometry(&odometry, motor_left, motor_right, dt);
+        const motion_state_t motion_state =
+            classify_motion(odometry.yaw_rate_deg_s);
 
         const int32_t reflection_left =
             pup_color_sensor_reflection(sensor_left);
@@ -891,15 +1090,23 @@ void Main(intptr_t exinf)
             saved_calibration.white_right
         );
 
-        /* The sensors straddle the line. At the centered position both see
-         * white; if one moves over black, the normalized difference changes. */
-        const float position = normalized_right - normalized_left;
-        const float error = -position;
+        /* Positive error means the left sensor is darker than the right:
+         * the line is under the left sensor and the robot should steer left. */
+        float error = normalized_left - normalized_right;
+        const line_state_t line_state =
+            classify_line_state(normalized_left, normalized_right, error);
+
+        /* Suppress tiny reflectance imbalance around the centered state. */
+        if (line_state == LINE_STATE_CENTERED &&
+            fabsf(error) < LINE_CENTER_DEADBAND) {
+            error = 0.0f;
+        }
 
         if (!pid_initialized) {
             last_error = error;
             derivative_filtered = 0.0f;
             integral = 0.0f;
+            last_steering = 0.0f;
             pid_initialized = true;
         }
 
@@ -910,8 +1117,24 @@ void Main(intptr_t exinf)
         derivative_filtered +=
             filter_alpha * (derivative_raw - derivative_filtered);
 
-        const float abs_error = error >= 0.0f ? error : -error;
-        const int32_t base_speed = calculate_base_speed(abs_error);
+        const float abs_error = fabsf(error);
+        int32_t base_speed = calculate_base_speed(
+            abs_error, fabsf(odometry.yaw_rate_deg_s));
+
+        /* Slow down for ambiguous transitions and wide-line/crossing states. */
+        if (line_state == LINE_STATE_BOTH_DARK &&
+            base_speed > LINE_BOTH_DARK_MAX_SPEED) {
+            base_speed = LINE_BOTH_DARK_MAX_SPEED;
+        } else if (line_state == LINE_STATE_TRANSITION &&
+                   base_speed > LINE_TRANSITION_MAX_SPEED) {
+            base_speed = LINE_TRANSITION_MAX_SPEED;
+        }
+
+        /* Encoder-derived yaw-rate feedback damps actual chassis rotation.
+         * With this motor sign convention, positive yaw is a left turn and
+         * positive steering commands a rightward correction. */
+        const float odometry_damping =
+            ODOM_YAW_DAMPING_GAIN * odometry.yaw_rate_deg_s;
 
         float steering_limit = MAX_STEERING;
         const float limit_from_min =
@@ -946,15 +1169,33 @@ void Main(intptr_t exinf)
         const bool pushes_low =
             candidate_output < -steering_limit && error < 0.0f;
 
-        if (!pushes_high && !pushes_low) {
+        /* Do not integrate while both sensors are over black: the pair no
+         * longer provides a trustworthy left/right position difference. */
+        if (line_state != LINE_STATE_BOTH_DARK &&
+            !pushes_high && !pushes_low) {
             integral = integral_candidate;
         }
 
-        const float steering = clamp_float(
-            p_term + KI * integral + d_term,
-            -steering_limit,
-            steering_limit
-        );
+        float steering;
+        if (line_state == LINE_STATE_BOTH_DARK) {
+            /* Carry the last steering direction through a wide line or
+             * crossing, while encoder yaw feedback gently damps rotation. */
+            steering = clamp_float(
+                last_steering + odometry_damping,
+                -steering_limit,
+                steering_limit
+            );
+        } else {
+            steering = clamp_float(
+                p_term + KI * integral + d_term + odometry_damping,
+                -steering_limit,
+                steering_limit
+            );
+        }
+
+        /* Keep the motion-state classification explicit for diagnostics
+         * and future state-specific tuning. */
+        (void)motion_state;
 
         int32_t left_speed =
             (int32_t)((float)base_speed + steering + 0.5f);
@@ -963,6 +1204,7 @@ void Main(intptr_t exinf)
 
         left_speed = clamp_speed(left_speed);
         right_speed = clamp_speed(right_speed);
+        last_steering = steering;
 
         const pbio_error_t left_result =
             pup_motor_set_speed(motor_left, left_speed);
@@ -977,6 +1219,8 @@ void Main(intptr_t exinf)
             pid_initialized = false;
             integral = 0.0f;
             derivative_filtered = 0.0f;
+            last_steering = 0.0f;
+            odometry.initialized = false;
 
             syslog(LOG_ERROR,
                    "PID V2: motor command failed L=%d R=%d",
