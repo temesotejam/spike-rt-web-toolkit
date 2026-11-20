@@ -13,7 +13,7 @@
 | [CS_S3](CS_S3/CS_S3.c) | Dポートのカラーセンサーで周囲の明るさを調べ、環境光の値が6以上なら「きらきら星」を繰り返し演奏します。各音の終了後に値を確認し、5以下なら一時停止、明るくなると続きの音から再開します。 |
 | [DC_S2](DC_S2/DC_S2.c) | Eポートの超音波センサーで距離を測り、中央ボタンのライトを250mm未満で赤、250mm以上500mm未満で黄、500mm以上で青にします。LCDには「Red／Yellow／Blue」を1文字ずつ繰り返し表示します。計測エラー時はライトを消灯し、LCDに「Err」を表示します。距離の数値はシリアルモニタに出力します。 |
 | [M_S6](M_S6/M_S6.c) | 左右ボタンで円・正方形を選び、中央ボタンで決定すると走行します。正方形の直進では左右エンコーダ差をフィードバック補正し、両輪の目標回転量をそろえます。 |
-| [PID Line Tracer](pid_exercise/pid_exercise.c) | 左右2つのカラーセンサー（B/F）の反射光差をPID制御してライントレースします。Cポートのフォースセンサーを1回押すと開始、再度押すと停止します。 |
+| [PID_Line_Tracer](PID_Line_Tracer/PID_Line_Tracer.c) | 左右2つのカラーセンサー（B/F）の反射光差をPID制御してライントレースします。Cポートのフォースセンサーを1回押すと開始、再度押すと停止します。 |
 | [multi_task1_A](multi_task1_A/multi_task1_A.c) | 元サンプルを基に、SUB_TASKを先に完了させてからMAIN_TASKを実行します。 |
 | [multi_task3](multi_task3/multi_task3.c) | MAIN_TASK、SUB_TASK1_A、SUB_TASK2の3タスクがセマフォで実行権を渡しながらカウントします。 |
 | [cyc_task_multi](cyc_task_multi/cyc_task_multi.c) | スター・ウォーズ再生、1秒ごとのLCDカウント、50cm四方の走行を3タスクで並列実行します。 |
@@ -71,7 +71,7 @@ SUB_TASK2 = 1
 
 なお、SPIKE Prime Hubは単一CPUで動作するため、3タスクが同じ瞬間にCPU上で実行されるわけではありません。ここでの「並列動作」は、タスクが待ち状態と実行状態を切り替えながら並行して進むマルチタスク動作を指します。
 
-## PID Line Tracer (pid_exercise)
+## PID_Line_Tracer
 
 元プログラム：[kouhei1970/pid_exercise](https://github.com/kouhei1970/pid_exercise)
 

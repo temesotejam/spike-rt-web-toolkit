@@ -1,5 +1,5 @@
 /*
- * pid_exercise.c
+ * PID_Line_Tracer.c
  *
  * 元リポジトリ：
  * https://github.com/kouhei1970/pid_exercise
@@ -28,7 +28,7 @@
 #include <stdbool.h>
 #include <t_syslog.h>
 
-#include "pid_exercise.h"
+#include "PID_Line_Tracer.h"
 #include "kernel_cfg.h"
 
 #include "spike/pup/motor.h"
