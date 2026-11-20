@@ -47,6 +47,7 @@
 #include "spike/hub/button.h"
 #include "spike/hub/display.h"
 #include "spike/hub/speaker.h"
+#include "spike/hub/imu.h"
 
 /* Port assignment */
 #define LEFT_COLOR_SENSOR       PBIO_PORT_ID_B
@@ -59,6 +60,16 @@
 #define CONTROL_PERIOD_US       10000U
 #define CONTROL_DT_MIN_US       1000U
 #define CONTROL_DT_MAX_US       50000U
+
+/* IMU initialization and stationary gyro-bias calibration. */
+#define IMU_INIT_RETRY_COUNT    300U
+#define IMU_INIT_RETRY_US       10000U
+#define IMU_BIAS_SAMPLES        100U
+#define IMU_BIAS_SAMPLE_US      10000U
+#define IMU_BIAS_WARN_STD_DPS   3.0f
+
+/* Keep diagnostic logging slower than the 100 Hz control loop. */
+#define IMU_LOG_INTERVAL_TICKS  20U
 
 /* Hub mode-menu polling */
 #define MENU_POLL_US            20000U
@@ -173,6 +184,7 @@ typedef struct {
     float heading_rad;
     float distance_mm;
     float linear_speed_mm_s;
+    float encoder_yaw_rate_deg_s;
     float yaw_rate_deg_s;
     float curvature_per_m;
     bool initialized;
@@ -241,6 +253,7 @@ static void reset_odometry(odometry_t *odometry)
     odometry->heading_rad = 0.0f;
     odometry->distance_mm = 0.0f;
     odometry->linear_speed_mm_s = 0.0f;
+    odometry->encoder_yaw_rate_deg_s = 0.0f;
     odometry->yaw_rate_deg_s = 0.0f;
     odometry->curvature_per_m = 0.0f;
     odometry->initialized = false;
@@ -262,6 +275,7 @@ static void update_odometry(
         odometry->previous_left_count = left_count;
         odometry->previous_right_count = right_count;
         odometry->linear_speed_mm_s = 0.0f;
+        odometry->encoder_yaw_rate_deg_s = 0.0f;
         odometry->yaw_rate_deg_s = 0.0f;
         odometry->curvature_per_m = 0.0f;
         odometry->initialized = true;
@@ -317,6 +331,8 @@ static void update_odometry(
         const float yaw_rate_raw =
             ((right_speed_mm_s - left_speed_mm_s) / WHEEL_TRACK_MM) *
             ODOM_RAD_TO_DEG;
+
+        odometry->encoder_yaw_rate_deg_s = yaw_rate_raw;
 
         const float filter_alpha =
             dt / (ODOM_YAW_FILTER_TAU_S + dt);
@@ -518,6 +534,68 @@ static bool valid_reflection(int32_t value)
 {
     return value >= 0 && value <= 100;
 }
+
+static bool initialize_imu(float gyro_bias[3], float gyro_stddev[3])
+{
+    pbio_error_t result = PBIO_ERROR_AGAIN;
+
+    /* The IMU driver initializes asynchronously in the Pybricks task.
+     * Retry PBIO_ERROR_AGAIN from ordinary task context. */
+    for (unsigned int i = 0; i < IMU_INIT_RETRY_COUNT; i++) {
+        result = hub_imu_init();
+
+        if (result == PBIO_SUCCESS) {
+            break;
+        }
+
+        if (result != PBIO_ERROR_AGAIN) {
+            return false;
+        }
+
+        dly_tsk(IMU_INIT_RETRY_US);
+    }
+
+    if (result != PBIO_SUCCESS) {
+        return false;
+    }
+
+    /* The robot must remain stationary while estimating the gyro zero bias. */
+    float sum[3] = {0.0f, 0.0f, 0.0f};
+    float sum_sq[3] = {0.0f, 0.0f, 0.0f};
+
+    for (unsigned int i = 0; i < IMU_BIAS_SAMPLES; i++) {
+        float angular_velocity[3];
+
+        dly_tsk(IMU_BIAS_SAMPLE_US);
+        hub_imu_get_angular_velocity(angular_velocity);
+
+        for (unsigned int axis = 0; axis < 3; axis++) {
+            if (!isfinite(angular_velocity[axis])) {
+                return false;
+            }
+
+            sum[axis] += angular_velocity[axis];
+            sum_sq[axis] += angular_velocity[axis] *
+                            angular_velocity[axis];
+        }
+    }
+
+    for (unsigned int axis = 0; axis < 3; axis++) {
+        const float mean = sum[axis] / (float)IMU_BIAS_SAMPLES;
+        float variance =
+            (sum_sq[axis] / (float)IMU_BIAS_SAMPLES) - mean * mean;
+
+        if (variance < 0.0f) {
+            variance = 0.0f;
+        }
+
+        gyro_bias[axis] = mean;
+        gyro_stddev[axis] = sqrtf(variance);
+    }
+
+    return true;
+}
+
 
 /* Initialize one sensor's crossing detector from its white baseline. */
 static void init_sensor_crossing(
@@ -881,6 +959,35 @@ void Main(intptr_t exinf)
            "PID V2: initialized; A/E motors, B/F colors, C force sensor");
     dly_tsk(3000000);
 
+    /* Initialize the built-in LSM6DS3TR-C IMU and estimate its stationary
+     * gyro bias. If unavailable, line tracing remains available using
+     * encoder-only motion estimates. */
+    float gyro_bias[3] = {0.0f, 0.0f, 0.0f};
+    float gyro_stddev[3] = {0.0f, 0.0f, 0.0f};
+    const bool imu_available = initialize_imu(gyro_bias, gyro_stddev);
+
+    if (imu_available) {
+        syslog(LOG_NOTICE,
+               "IMU bias x10 dps X=%ld Y=%ld Z=%ld",
+               (long)(gyro_bias[0] * 10.0f),
+               (long)(gyro_bias[1] * 10.0f),
+               (long)(gyro_bias[2] * 10.0f));
+
+        syslog(LOG_NOTICE,
+               "IMU noise x10 dps X=%ld Y=%ld Z=%ld",
+               (long)(gyro_stddev[0] * 10.0f),
+               (long)(gyro_stddev[1] * 10.0f),
+               (long)(gyro_stddev[2] * 10.0f));
+
+        if (gyro_stddev[2] > IMU_BIAS_WARN_STD_DPS) {
+            syslog(LOG_WARNING,
+                   "IMU: robot moved or gyro noisy during bias calibration");
+        }
+    } else {
+        syslog(LOG_WARNING,
+               "IMU unavailable; continuing with encoder-only diagnostics");
+    }
+
     hub_speaker_set_volume(100);
     hub_speaker_play_tone(695, 200);
 
@@ -975,6 +1082,7 @@ void Main(intptr_t exinf)
 
     uint32_t last_tick_hrt = 0;
     bool have_last_tick = false;
+    unsigned int imu_log_ticks = 0;
 
     syslog(LOG_NOTICE,
            "PID V2: line trace ready; force sensor C starts/stops");
@@ -1084,6 +1192,37 @@ void Main(intptr_t exinf)
         update_odometry(&odometry, motor_left, motor_right, dt);
         const motion_state_t motion_state =
             classify_motion(odometry.yaw_rate_deg_s);
+
+        /* Phase 1: acquire IMU data for diagnostics only. The PID and
+         * steering output intentionally remain encoder/line based until
+         * the measured gyro response and sign have been checked on the robot. */
+        if (imu_available) {
+            float acceleration[3];
+            float angular_velocity[3];
+
+            hub_imu_get_acceleration(acceleration);
+            hub_imu_get_angular_velocity(angular_velocity);
+
+            for (unsigned int axis = 0; axis < 3; axis++) {
+                angular_velocity[axis] -= gyro_bias[axis];
+            }
+
+            imu_log_ticks++;
+            if (imu_log_ticks >= IMU_LOG_INTERVAL_TICKS) {
+                imu_log_ticks = 0;
+
+                syslog(LOG_NOTICE,
+                       "IMU t=%ldms ACCx10=%ld,%ld,%ld GYROx10=%ld,%ld,%ld ENC_YAWx10=%ld",
+                       (long)(now_hrt / 1000U),
+                       (long)(acceleration[0] * 10.0f),
+                       (long)(acceleration[1] * 10.0f),
+                       (long)(acceleration[2] * 10.0f),
+                       (long)(angular_velocity[0] * 10.0f),
+                       (long)(angular_velocity[1] * 10.0f),
+                       (long)(angular_velocity[2] * 10.0f),
+                       (long)(odometry.encoder_yaw_rate_deg_s * 10.0f));
+            }
+        }
 
         const int32_t reflection_left =
             pup_color_sensor_reflection(sensor_left);
