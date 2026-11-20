@@ -120,6 +120,9 @@
 #define ODOM_YAW_RATE_FULL       60.0f
 #define ODOM_YAW_DAMPING_GAIN    0.15f
 #define ODOM_YAW_FILTER_TAU_S    0.050f
+#define ODOM_GYRO_WEIGHT         0.85f
+#define ODOM_ENCODER_WEIGHT      (1.0f - ODOM_GYRO_WEIGHT)
+#define IMU_ENCODER_DISAGREE_DPS 35.0f
 
 /* Normalized reflectance state thresholds (black=0, white=100). */
 #define LINE_DARK_THRESHOLD      45.0f
@@ -188,7 +191,9 @@ typedef struct {
     float distance_mm;
     float linear_speed_mm_s;
     float encoder_yaw_rate_deg_s;
-    float yaw_rate_deg_s;
+    float gyro_yaw_rate_deg_s;
+    float yaw_rate_difference_deg_s;
+    float yaw_rate_deg_s; /* fused yaw rate */
     float curvature_per_m;
     bool initialized;
 } odometry_t;
@@ -257,6 +262,8 @@ static void reset_odometry(odometry_t *odometry)
     odometry->distance_mm = 0.0f;
     odometry->linear_speed_mm_s = 0.0f;
     odometry->encoder_yaw_rate_deg_s = 0.0f;
+    odometry->gyro_yaw_rate_deg_s = 0.0f;
+    odometry->yaw_rate_difference_deg_s = 0.0f;
     odometry->yaw_rate_deg_s = 0.0f;
     odometry->curvature_per_m = 0.0f;
     odometry->initialized = false;
@@ -265,21 +272,59 @@ static void reset_odometry(odometry_t *odometry)
 /* Differential-drive odometry from the standard motor encoder API.
  * pup_motor_setup() defines each motor's positive direction as forward,
  * so both encoder increments are positive during straight forward motion. */
+/* Fuse differential-drive encoder odometry with the Hub gyro.
+ *
+ * - Wheel encoder angle increments provide forward distance and an
+ *   independent estimate of heading change.
+ * - Bias-corrected IMU Z gyro provides the fast body yaw-rate measurement.
+ * - The initial complementary blend uses 85% gyro / 15% encoder for yaw.
+ *
+ * The wheel geometry comes from M_S6.c: 88 mm tire diameter and 144 mm
+ * wheel-center spacing. Positive yaw is a left turn for both sources:
+ * (right wheel travel - left wheel travel) / track width.
+ */
 static void update_odometry(
     odometry_t *odometry,
     pup_motor_t *motor_left,
     pup_motor_t *motor_right,
-    float dt)
+    float dt,
+    float gyro_z_deg_s,
+    bool imu_available)
 {
     const int32_t left_count = pup_motor_get_count(motor_left);
     const int32_t right_count = pup_motor_get_count(motor_right);
 
+    const float mm_per_degree =
+        (ODOM_PI * WHEEL_DIAMETER_MM) / 360.0f;
+
+    /* Motor speed is the API's measured encoder-derived speed [deg/s]. */
+    const float left_speed_mm_s =
+        (float)pup_motor_get_speed(motor_left) * mm_per_degree;
+    const float right_speed_mm_s =
+        (float)pup_motor_get_speed(motor_right) * mm_per_degree;
+
+    odometry->linear_speed_mm_s =
+        (left_speed_mm_s + right_speed_mm_s) * 0.5f;
+
+    const float encoder_yaw_rate =
+        ((right_speed_mm_s - left_speed_mm_s) / WHEEL_TRACK_MM) *
+        ODOM_RAD_TO_DEG;
+
+    odometry->encoder_yaw_rate_deg_s = encoder_yaw_rate;
+    odometry->gyro_yaw_rate_deg_s =
+        imu_available ? gyro_z_deg_s : 0.0f;
+    odometry->yaw_rate_difference_deg_s =
+        imu_available ? gyro_z_deg_s - encoder_yaw_rate : 0.0f;
+
+    const float fused_yaw_rate_raw = imu_available
+        ? (ODOM_GYRO_WEIGHT * gyro_z_deg_s +
+           ODOM_ENCODER_WEIGHT * encoder_yaw_rate)
+        : encoder_yaw_rate;
+
     if (!odometry->initialized) {
         odometry->previous_left_count = left_count;
         odometry->previous_right_count = right_count;
-        odometry->linear_speed_mm_s = 0.0f;
-        odometry->encoder_yaw_rate_deg_s = 0.0f;
-        odometry->yaw_rate_deg_s = 0.0f;
+        odometry->yaw_rate_deg_s = fused_yaw_rate_raw;
         odometry->curvature_per_m = 0.0f;
         odometry->initialized = true;
         return;
@@ -293,8 +338,6 @@ static void update_odometry(
     odometry->previous_left_count = left_count;
     odometry->previous_right_count = right_count;
 
-    const float mm_per_degree =
-        (ODOM_PI * WHEEL_DIAMETER_MM) / 360.0f;
     const float delta_left_mm =
         (float)delta_left_deg * mm_per_degree;
     const float delta_right_mm =
@@ -302,15 +345,25 @@ static void update_odometry(
 
     const float delta_distance =
         (delta_left_mm + delta_right_mm) * 0.5f;
-    const float delta_heading =
+    const float delta_heading_encoder =
         (delta_right_mm - delta_left_mm) / WHEEL_TRACK_MM;
+
+    /* Integrate the gyro and encoder heading increments with the same
+     * complementary weights used for yaw-rate fusion. */
+    const float delta_heading_gyro =
+        gyro_z_deg_s * dt / ODOM_RAD_TO_DEG;
+    const float delta_heading_fused = imu_available
+        ? (ODOM_GYRO_WEIGHT * delta_heading_gyro +
+           ODOM_ENCODER_WEIGHT * delta_heading_encoder)
+        : delta_heading_encoder;
+
     const float midpoint_heading =
-        odometry->heading_rad + delta_heading * 0.5f;
+        odometry->heading_rad + delta_heading_fused * 0.5f;
 
     odometry->x_mm += delta_distance * cosf(midpoint_heading);
     odometry->y_mm += delta_distance * sinf(midpoint_heading);
     odometry->distance_mm += delta_distance;
-    odometry->heading_rad += delta_heading;
+    odometry->heading_rad += delta_heading_fused;
 
     while (odometry->heading_rad > ODOM_PI) {
         odometry->heading_rad -= 2.0f * ODOM_PI;
@@ -319,32 +372,16 @@ static void update_odometry(
         odometry->heading_rad += 2.0f * ODOM_PI;
     }
 
-    /* Use the motor API's encoder-derived speed estimate for velocity.
-     * This is less quantized than differentiating integer-degree counts
-     * over a single 10 ms control interval. */
-    const float left_speed_mm_s =
-        (float)pup_motor_get_speed(motor_left) * mm_per_degree;
-    const float right_speed_mm_s =
-        (float)pup_motor_get_speed(motor_right) * mm_per_degree;
-
+    /* Smooth the fused rate used by motion classification and steering. */
     if (dt > 0.0f) {
-        odometry->linear_speed_mm_s =
-            (left_speed_mm_s + right_speed_mm_s) * 0.5f;
-
-        const float yaw_rate_raw =
-            ((right_speed_mm_s - left_speed_mm_s) / WHEEL_TRACK_MM) *
-            ODOM_RAD_TO_DEG;
-
-        odometry->encoder_yaw_rate_deg_s = yaw_rate_raw;
-
         const float filter_alpha =
             dt / (ODOM_YAW_FILTER_TAU_S + dt);
 
         odometry->yaw_rate_deg_s +=
-            filter_alpha * (yaw_rate_raw - odometry->yaw_rate_deg_s);
+            filter_alpha *
+            (fused_yaw_rate_raw - odometry->yaw_rate_deg_s);
     } else {
-        odometry->linear_speed_mm_s = 0.0f;
-        odometry->yaw_rate_deg_s = 0.0f;
+        odometry->yaw_rate_deg_s = fused_yaw_rate_raw;
     }
 
     const float linear_speed_m_s =
@@ -372,6 +409,29 @@ static motion_state_t classify_motion(float yaw_rate_deg_s)
     }
     return MOTION_STATE_STRAIGHT;
 }
+
+static const char *line_state_name(line_state_t state)
+{
+    switch (state) {
+    case LINE_STATE_CENTERED:   return "CENTER";
+    case LINE_STATE_LEFT_EDGE:  return "LEFT";
+    case LINE_STATE_RIGHT_EDGE: return "RIGHT";
+    case LINE_STATE_BOTH_DARK:  return "BOTH_DARK";
+    case LINE_STATE_TRANSITION: return "TRANSITION";
+    default:                    return "UNKNOWN";
+    }
+}
+
+static const char *motion_state_name(motion_state_t state)
+{
+    switch (state) {
+    case MOTION_STATE_TURNING_LEFT:  return "LEFT";
+    case MOTION_STATE_TURNING_RIGHT: return "RIGHT";
+    case MOTION_STATE_STRAIGHT:
+    default:                         return "STRAIGHT";
+    }
+}
+
 
 /* The two sensors straddle the line: centered normally means both are
  * white and balanced. A dark left/right sensor identifies which side of
@@ -1191,18 +1251,14 @@ void Main(intptr_t exinf)
             continue;
         }
 
-        /* Update wheel odometry before computing the current control output. */
-        update_odometry(&odometry, motor_left, motor_right, dt);
-        const motion_state_t motion_state =
-            classify_motion(odometry.yaw_rate_deg_s);
+        /* Read the latest cached IMU sample. The standard SPIKE-RT API
+         * returns the most recently acquired driver data; it does not start
+         * a new I2C transaction from this control task. */
+        float acceleration[3] = {0.0f, 0.0f, 0.0f};
+        float angular_velocity[3] = {0.0f, 0.0f, 0.0f};
+        float gyro_z_corrected = 0.0f;
 
-        /* Phase 1: acquire IMU data for diagnostics only. The PID and
-         * steering output intentionally remain encoder/line based until
-         * the measured gyro response and sign have been checked on the robot. */
         if (imu_available) {
-            float acceleration[3];
-            float angular_velocity[3];
-
             hub_imu_get_acceleration(acceleration);
             hub_imu_get_angular_velocity(angular_velocity);
 
@@ -1210,22 +1266,23 @@ void Main(intptr_t exinf)
                 angular_velocity[axis] -= gyro_bias[axis];
             }
 
-            imu_log_ticks++;
-            if (imu_log_ticks >= IMU_LOG_INTERVAL_TICKS) {
-                imu_log_ticks = 0;
-
-                syslog(LOG_NOTICE,
-                       "IMU t=%ldms ACCx10=%ld,%ld,%ld GYROx10=%ld,%ld,%ld ENC_YAWx10=%ld",
-                       (long)(now_hrt / 1000U),
-                       (long)(acceleration[0] * 10.0f),
-                       (long)(acceleration[1] * 10.0f),
-                       (long)(acceleration[2] * 10.0f),
-                       (long)(angular_velocity[0] * 10.0f),
-                       (long)(angular_velocity[1] * 10.0f),
-                       (long)(angular_velocity[2] * 10.0f),
-                       (long)(odometry.encoder_yaw_rate_deg_s * 10.0f));
-            }
+            gyro_z_corrected = angular_velocity[2];
         }
+
+        /* Update wheel odometry and fuse encoder yaw with the bias-corrected
+         * IMU Z gyro. If IMU initialization failed, encoder-only odometry
+         * remains available. */
+        update_odometry(
+            &odometry,
+            motor_left,
+            motor_right,
+            dt,
+            gyro_z_corrected,
+            imu_available
+        );
+
+        const motion_state_t motion_state =
+            classify_motion(odometry.yaw_rate_deg_s);
 
         const int32_t reflection_left =
             pup_color_sensor_reflection(sensor_left);
@@ -1256,7 +1313,7 @@ void Main(intptr_t exinf)
         );
 
         /* Negative error means the left sensor is darker than the right:
-         * the line is under the left sensor and the robot should steer left. */
+         * the line is under the left sensor; slow the left wheel to steer left. */
         float error = normalized_left - normalized_right;
         const line_state_t line_state =
             classify_line_state(normalized_left, normalized_right, error);
@@ -1394,6 +1451,49 @@ void Main(intptr_t exinf)
             syslog(LOG_ERROR,
                    "PID V2: motor command failed L=%d R=%d",
                    (int)left_result, (int)right_result);
+        }
+
+        /* 5 Hz diagnostics: raw sensor values, line/motion state,
+         * wheel-vs-gyro yaw, fused pose, and commanded wheel speeds. */
+        imu_log_ticks++;
+        if (imu_log_ticks >= IMU_LOG_INTERVAL_TICKS) {
+            imu_log_ticks = 0;
+
+            syslog(LOG_NOTICE,
+                   "TRACE t=%ld LS=%s MS=%s RAW=%ld,%ld NORMx10=%ld,%ld ERRx10=%ld STEERx10=%ld",
+                   (long)(now_hrt / 1000U),
+                   line_state_name(line_state),
+                   motion_state_name(motion_state),
+                   (long)reflection_left,
+                   (long)reflection_right,
+                   (long)(normalized_left * 10.0f),
+                   (long)(normalized_right * 10.0f),
+                   (long)(error * 10.0f),
+                   (long)(steering * 10.0f));
+
+            syslog(LOG_NOTICE,
+                   "FUSION IMU=%d GZx10=%ld EZx10=%ld DIFFx10=%ld FZx10=%ld Hx10=%ld X=%ld Y=%ld D=%ld V=%ld Kx1000=%ld",
+                   imu_available ? 1 : 0,
+                   (long)(odometry.gyro_yaw_rate_deg_s * 10.0f),
+                   (long)(odometry.encoder_yaw_rate_deg_s * 10.0f),
+                   (long)(odometry.yaw_rate_difference_deg_s * 10.0f),
+                   (long)(odometry.yaw_rate_deg_s * 10.0f),
+                   (long)(odometry.heading_rad * ODOM_RAD_TO_DEG * 10.0f),
+                   (long)odometry.x_mm,
+                   (long)odometry.y_mm,
+                   (long)odometry.distance_mm,
+                   (long)odometry.linear_speed_mm_s,
+                   (long)(odometry.curvature_per_m * 1000.0f));
+
+            syslog(LOG_NOTICE,
+                   "MOTOR CMD L=%ld R=%ld ACCx10=%ld,%ld,%ld GYROx10=%ld,%ld",
+                   (long)left_speed,
+                   (long)right_speed,
+                   (long)(acceleration[0] * 10.0f),
+                   (long)(acceleration[1] * 10.0f),
+                   (long)(acceleration[2] * 10.0f),
+                   (long)(angular_velocity[0] * 10.0f),
+                   (long)(angular_velocity[1] * 10.0f));
         }
 
         last_error = error;
