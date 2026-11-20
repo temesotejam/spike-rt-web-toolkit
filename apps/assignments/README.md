@@ -14,6 +14,7 @@
 | [DC_S2](DC_S2/DC_S2.c) | Eポートの超音波センサーで距離を測り、中央ボタンのライトを250mm未満で赤、250mm以上500mm未満で黄、500mm以上で青にします。LCDには「Red／Yellow／Blue」を1文字ずつ繰り返し表示します。計測エラー時はライトを消灯し、LCDに「Err」を表示します。距離の数値はシリアルモニタに出力します。 |
 | [M_S6](M_S6/M_S6.c) | 左右ボタンで円・正方形を選び、中央ボタンで決定すると走行します。正方形の直進では左右エンコーダ差をフィードバック補正し、両輪の目標回転量をそろえます。 |
 | [PID_Line_Tracer](PID_Line_Tracer/PID_Line_Tracer.c) | 左右2つのカラーセンサー（B/F）の反射光差をPID制御してライントレースします。Cポートのフォースセンサーを1回押すと開始、再度押すと停止します。 |
+| [PID_Line_Tracer_V2](PID_Line_Tracer_V2/PID_Line_Tracer_V2.c) | PID_Line_Tracerの改善版。10ms周期通知、実測制御時間、起動時センサー差校正、微分フィルタ、積分アンチワインドアップ、偏差に応じた速度調整を追加。標準SPIKE-RT APIのみを使用します。 |
 | [multi_task1_A](multi_task1_A/multi_task1_A.c) | 元サンプルを基に、SUB_TASKを先に完了させてからMAIN_TASKを実行します。 |
 | [multi_task3](multi_task3/multi_task3.c) | MAIN_TASK、SUB_TASK1_A、SUB_TASK2の3タスクがセマフォで実行権を渡しながらカウントします。 |
 | [cyc_task_multi](cyc_task_multi/cyc_task_multi.c) | スター・ウォーズ再生、1秒ごとのLCDカウント、50cm四方の経路をMOVE_TASKが無限に繰り返し走行する3タスク並列プログラムです。 |
@@ -104,6 +105,36 @@ SUB_TASK2 = 1
 起動から約3秒後に合図音が鳴り、Cポートのフォースセンサーの押下を受け付けます。最初の押下で走行開始、いったん離してから次の押下で両モーターをブレーキ停止します。停止後にもう一度押すと再開します。押しっぱなしでは切り替わりません。停止中はPID演算も速度指令もしません。
 
 カラーセンサーはラインの左右に同じ高さ・同じ距離で取り付けてください。目標反射光差は元プログラムと同じ0です。実際のコース、センサー位置、床面に応じて`midpoint`とPIDゲインを調整してください。
+
+## PID_Line_Tracer_V2
+
+[PID_Line_Tracer](PID_Line_Tracer/PID_Line_Tracer.c)を残したまま、標準SPIKE-RT v0.2.0 APIだけで制御周期とPID演算を改善した別バージョンです。モーター・カラーセンサー・フォースセンサーのドライバは変更していません。
+
+### Hardware and ports
+
+| Device | Port |
+| --- | --- |
+| Left motor | A |
+| Right motor | E |
+| Left color sensor | B |
+| Right color sensor | F |
+| Start/stop force sensor | C |
+
+### Improvements
+
+1. **Periodic control wake-up:** a 10ms cyclic handler releases a binary semaphore. The control task waits on that semaphore instead of adding a relative 10ms delay after every calculation.
+2. **Measured elapsed time:** `fch_hrt()` measures the actual interval between control iterations. The PID derivative and integral use this measured interval, with bounds for abnormal delays.
+3. **Sensor-offset calibration:** 32 reflection-difference samples are averaged while the robot is stationary. This compensates for a constant left/right sensor offset. Place the robot centered over the line before powering on and keep it still during the initial calibration.
+4. **Filtered derivative:** a first-order low-pass filter reduces derivative spikes caused by reflection noise.
+5. **Conditional integral anti-windup:** the integral term is not accumulated when it would push an already saturated steering output further into saturation.
+6. **Adaptive speed:** the base wheel speed decreases as the absolute line-position error grows. Both wheel commands are limited to the configured range.
+7. **Start/stop input:** force sensor C toggles operation. Three consecutive 10ms samples are required for a press or release, preventing repeated toggles while the sensor is held.
+
+### Initial tuning values
+
+The original exercise gains are retained as initial values: `KP=1.0`, `KI=0.1`, and `KD=0.1`. The straight/turn base speeds start at 120/80 deg/s. These are starting parameters, not verified optimum values; tune them on the actual course.
+
+The cyclic handler performs only a semaphore notification. Sensor reads, PID calculations, and motor commands run in the ordinary task context. If a control iteration falls behind, the binary semaphore limits pending notifications to one and an overrun warning is recorded. This improves scheduling behavior but does not guarantee a hard 10ms deadline; verify timing on the actual Hub.
 
 ## cyc_task：周期ハンドラの動作と改造内容
 

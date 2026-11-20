@@ -1,0 +1,7 @@
+{
+  "id": "PID_Line_Tracer_V2",
+  "name": "PID_Line_Tracer_V2",
+  "description": "Improved dual-color-sensor PID line tracer for the M_S6 driving base. Uses a 10 ms cyclic notification, measured control interval, stationary sensor-offset calibration, filtered derivative, conditional integral anti-windup, adaptive base speed, and force sensor C for start/stop. Standard SPIKE-RT v0.2.0 APIs only; no driver modifications.",
+  "warning": "Before power-on, place both color sensors in their centered starting position over the line. Sensor-offset calibration assumes the robot remains stationary during startup. Verify the actual control interval and tune PID gains and speed limits on the real robot.",
+  "origin": "https://github.com/kouhei1970/pid_exercise"
+}
