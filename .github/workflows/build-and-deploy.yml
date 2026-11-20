@@ -56,6 +56,12 @@ jobs:
           git -C spike-rt remote set-url --push origin DISABLED
           git -C spike-rt remote -v
 
+      # SPIKE-RT v0.2.0 disables Port F in its platform config.
+      # This local patch restores the A-F mapping for B/F colors + C force.
+      - name: Enable Port F in pinned SPIKE-RT
+        shell: bash
+        run: python3 .github/scripts/enable-spike-rt-port-f.py
+
       - name: Import zipped applications
         shell: bash
         run: python3 .github/scripts/import-zipped-apps.py
