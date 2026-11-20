@@ -180,6 +180,10 @@ The 85/15 blend and filter constant are initial engineering values, not tuned va
 
 #### 5 Hz diagnostics
 
+While line tracing is selected but has not yet been started with force sensor C, the program logs an `IDLE` record every 20 control ticks. The motors are not commanded in this state. This makes it possible to inspect stationary gyro noise and gently rotate the robot by hand to verify the gyro Z sign before beginning a run.
+
+
+
 Every 20 control ticks (nominally 5 Hz), syslog records:
 
 - line state and motion state
