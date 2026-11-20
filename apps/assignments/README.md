@@ -14,7 +14,7 @@
 | [DC_S2](DC_S2/DC_S2.c) | Eポートの超音波センサーで距離を測り、中央ボタンのライトを250mm未満で赤、250mm以上500mm未満で黄、500mm以上で青にします。LCDには「Red／Yellow／Blue」を1文字ずつ繰り返し表示します。計測エラー時はライトを消灯し、LCDに「Err」を表示します。距離の数値はシリアルモニタに出力します。 |
 | [M_S6](M_S6/M_S6.c) | 左右ボタンで円・正方形を選び、中央ボタンで決定すると走行します。正方形の直進では左右エンコーダ差をフィードバック補正し、両輪の目標回転量をそろえます。 |
 | [PID_Line_Tracer](PID_Line_Tracer/PID_Line_Tracer.c) | 左右2つのカラーセンサー（B/F）の反射光差をPID制御してライントレースします。Cポートのフォースセンサーを1回押すと開始、再度押すと停止します。 |
-| [PID_Line_Tracer_V2](PID_Line_Tracer_V2/PID_Line_Tracer_V2.c) | PID_Line_Tracerの改善版。10ms周期通知、実測制御時間、起動時センサー差校正、微分フィルタ、積分アンチワインドアップ、偏差に応じた速度調整を追加。標準SPIKE-RT APIのみを使用します。 |
+| [PID_Line_Tracer_V2](PID_Line_Tracer_V2/PID_Line_Tracer_V2.c) | 起動時にHubの左右ボタンでライントレース／校正を選択。校正では白→黒→白の横切り走行で左右センサーを個別校正し、成功後はモード選択へ戻ります。標準SPIKE-RT APIのみを使用します。 |
 | [multi_task1_A](multi_task1_A/multi_task1_A.c) | 元サンプルを基に、SUB_TASKを先に完了させてからMAIN_TASKを実行します。 |
 | [multi_task3](multi_task3/multi_task3.c) | MAIN_TASK、SUB_TASK1_A、SUB_TASK2の3タスクがセマフォで実行権を渡しながらカウントします。 |
 | [cyc_task_multi](cyc_task_multi/cyc_task_multi.c) | スター・ウォーズ再生、1秒ごとのLCDカウント、50cm四方の経路をMOVE_TASKが無限に繰り返し走行する3タスク並列プログラムです。 |
@@ -120,21 +120,44 @@ SUB_TASK2 = 1
 | Right color sensor | F |
 | Start/stop force sensor | C |
 
+### Mode selection and operation
+
+The Hub display shows one letter for the current selection:
+
+- **L**: line tracing
+- **C**: calibration
+
+Use the Hub's LEFT button to select line tracing, RIGHT button to select calibration, and CENTER button to confirm. The force sensor on port C remains the line-tracing start/stop control.
+
+After a successful calibration, the robot stops and returns to the mode-selection screen. Select **L** and confirm to enter line-tracing standby. Press the force sensor on C to start; press it again to stop. Calibration values remain in RAM until power-off.
+
+### Moving calibration across a transverse line
+
+Place the robot on the white surface, facing straight toward a black line that crosses the direction of travel. Both color sensors (B and F) must initially be on white. Select **C** and confirm.
+
+1. The robot samples both white surfaces while stationary.
+2. It drives forward at a low speed while synchronizing the left/right wheel encoders.
+3. Each sensor independently records its transition from white to black and then back to white.
+4. The robot brakes only after both sensors have completed the full white -> black -> white sequence.
+5. White and black averages are calculated separately for the left and right sensors. The result is accepted only when both sensors have sufficient black samples and sufficient white/black contrast.
+
+The calibration pass has a maximum travel limit and timeout. The CENTER button cancels the pass. A failed or cancelled attempt does not overwrite a previous successful calibration. If calibration fails, check the initial placement, sensor height, line width, and reflection contrast before retrying.
+
 ### Improvements
 
 1. **Periodic control wake-up:** a 10ms cyclic handler releases a binary semaphore. The control task waits on that semaphore instead of adding a relative 10ms delay after every calculation.
 2. **Measured elapsed time:** `fch_hrt()` measures the actual interval between control iterations. The PID derivative and integral use this measured interval, with bounds for abnormal delays.
-3. **Sensor-offset calibration:** 32 reflection-difference samples are averaged while the robot is stationary. This compensates for a constant left/right sensor offset. Place the robot centered over the line before powering on and keep it still during the initial calibration.
+3. **Per-sensor calibration:** the moving calibration measures white and black reflectance independently for sensors B and F. Each sensor is normalized to a common 0..100 scale (black=0, white=100), compensating for sensor-to-sensor differences.
 4. **Filtered derivative:** a first-order low-pass filter reduces derivative spikes caused by reflection noise.
 5. **Conditional integral anti-windup:** the integral term is not accumulated when it would push an already saturated steering output further into saturation.
 6. **Adaptive speed:** the base wheel speed decreases as the absolute line-position error grows. Both wheel commands are limited to the configured range.
-7. **Start/stop input:** force sensor C toggles operation. Three consecutive 10ms samples are required for a press or release, preventing repeated toggles while the sensor is held.
+7. **Start/stop input:** force sensor C toggles line-tracing operation. Three consecutive 10ms samples are required for a press or release, preventing repeated toggles while the sensor is held.
 
 ### Initial tuning values
 
-The original exercise gains are retained as initial values: `KP=1.0`, `KI=0.1`, and `KD=0.1`. The straight/turn base speeds start at 120/80 deg/s. These are starting parameters, not verified optimum values; tune them on the actual course.
+The original exercise gains are retained as initial values: `KP=1.0`, `KI=0.1`, and `KD=0.1`. The straight/turn base speeds start at 120/80 deg/s. Calibration speed starts at 60 deg/s. These are initial values, not verified optimum values; tune them on the actual course.
 
-The cyclic handler performs only a semaphore notification. Sensor reads, PID calculations, and motor commands run in the ordinary task context. If a control iteration falls behind, the binary semaphore limits pending notifications to one and an overrun warning is recorded. This improves scheduling behavior but does not guarantee a hard 10ms deadline; verify timing on the actual Hub.
+The cyclic handler performs only a semaphore notification. Sensor reads, calibration, PID calculations, and motor commands run in ordinary task context. If a control iteration falls behind, the binary semaphore limits pending notifications to one and an overrun warning is recorded. This improves scheduling behavior but does not guarantee a hard 10ms deadline; verify timing on the actual Hub.
 
 ## cyc_task：周期ハンドラの動作と改造内容
 
