@@ -30,9 +30,11 @@
  *   - Per-sensor reflectance normalization.
  *   - Filtered derivative and conditional integral anti-windup.
  *   - Adaptive base speed and bounded wheel commands.
- *   - Built-in IMU initialization, stationary gyro-bias calibration,
- *     and 5 Hz diagnostic logging for comparison with encoder yaw rate.
- *   - IMU data is diagnostic-only in this phase; it does not yet alter PID.
+ *   - Built-in IMU initialization and stationary gyro-bias/noise calibration.
+ *   - 85/15 IMU-gyro/encoder yaw fusion for heading, motion state and steering.
+ *   - 5 Hz logs compare both yaw sources and record fused pose/control state.
+ *   - Encoder-only fallback if IMU initialization or stationary calibration
+ *     quality is inadequate.
  */
 
 #include <kernel.h>
@@ -70,6 +72,8 @@
 #define IMU_BIAS_SAMPLES        100U
 #define IMU_BIAS_SAMPLE_US      10000U
 #define IMU_BIAS_WARN_STD_DPS   3.0f
+#define IMU_BIAS_MAX_ABS_DPS    8.0f
+#define IMU_DISAGREE_CONFIRM_TICKS 5U
 
 /* Keep diagnostic logging slower than the 100 Hz control loop. */
 #define IMU_LOG_INTERVAL_TICKS  20U
@@ -289,7 +293,8 @@ static void update_odometry(
     pup_motor_t *motor_right,
     float dt,
     float gyro_z_deg_s,
-    bool imu_available)
+    bool imu_available,
+    bool imu_fusion_enabled)
 {
     const int32_t left_count = pup_motor_get_count(motor_left);
     const int32_t right_count = pup_motor_get_count(motor_right);
@@ -316,7 +321,7 @@ static void update_odometry(
     odometry->yaw_rate_difference_deg_s =
         imu_available ? gyro_z_deg_s - encoder_yaw_rate : 0.0f;
 
-    const float fused_yaw_rate_raw = imu_available
+    const float fused_yaw_rate_raw = imu_fusion_enabled
         ? (ODOM_GYRO_WEIGHT * gyro_z_deg_s +
            ODOM_ENCODER_WEIGHT * encoder_yaw_rate)
         : encoder_yaw_rate;
@@ -352,7 +357,7 @@ static void update_odometry(
      * complementary weights used for yaw-rate fusion. */
     const float delta_heading_gyro =
         gyro_z_deg_s * dt / ODOM_RAD_TO_DEG;
-    const float delta_heading_fused = imu_available
+    const float delta_heading_fused = imu_fusion_enabled
         ? (ODOM_GYRO_WEIGHT * delta_heading_gyro +
            ODOM_ENCODER_WEIGHT * delta_heading_encoder)
         : delta_heading_encoder;
@@ -1028,6 +1033,7 @@ void Main(intptr_t exinf)
     float gyro_bias[3] = {0.0f, 0.0f, 0.0f};
     float gyro_stddev[3] = {0.0f, 0.0f, 0.0f};
     const bool imu_available = initialize_imu(gyro_bias, gyro_stddev);
+    bool imu_fusion_enabled = imu_available;
 
     if (imu_available) {
         syslog(LOG_NOTICE,
@@ -1042,9 +1048,11 @@ void Main(intptr_t exinf)
                (long)(gyro_stddev[1] * 10.0f),
                (long)(gyro_stddev[2] * 10.0f));
 
-        if (gyro_stddev[2] > IMU_BIAS_WARN_STD_DPS) {
+        if (gyro_stddev[2] > IMU_BIAS_WARN_STD_DPS ||
+            fabsf(gyro_bias[2]) > IMU_BIAS_MAX_ABS_DPS) {
+            imu_fusion_enabled = false;
             syslog(LOG_WARNING,
-                   "IMU: robot moved or gyro noisy during bias calibration");
+                   "IMU: gyro calibration quality low; encoder-only fusion fallback");
         }
     } else {
         syslog(LOG_WARNING,
@@ -1146,6 +1154,8 @@ void Main(intptr_t exinf)
     uint32_t last_tick_hrt = 0;
     bool have_last_tick = false;
     unsigned int imu_log_ticks = 0;
+    unsigned int imu_disagree_ticks = 0;
+    bool imu_disagree_reported = false;
 
     syslog(LOG_NOTICE,
            "PID V2: line trace ready; force sensor C starts/stops");
@@ -1278,8 +1288,31 @@ void Main(intptr_t exinf)
             motor_right,
             dt,
             gyro_z_corrected,
-            imu_available
+            imu_available,
+            imu_fusion_enabled
         );
+
+        /* Persistent disagreement is useful evidence of wheel slip,
+         * sign/geometry mismatch, or excessive sensor delay. It is logged
+         * but does not automatically change the fusion weight. */
+        if (imu_fusion_enabled &&
+            fabsf(odometry.yaw_rate_difference_deg_s) >
+                IMU_ENCODER_DISAGREE_DPS) {
+            if (imu_disagree_ticks < IMU_DISAGREE_CONFIRM_TICKS) {
+                imu_disagree_ticks++;
+            }
+            if (imu_disagree_ticks >= IMU_DISAGREE_CONFIRM_TICKS &&
+                !imu_disagree_reported) {
+                imu_disagree_reported = true;
+                syslog(LOG_WARNING,
+                       "IMU/ENC yaw mismatch: gyro=%ld encoder=%ld dps",
+                       (long)odometry.gyro_yaw_rate_deg_s,
+                       (long)odometry.encoder_yaw_rate_deg_s);
+            }
+        } else {
+            imu_disagree_ticks = 0;
+            imu_disagree_reported = false;
+        }
 
         const motion_state_t motion_state =
             classify_motion(odometry.yaw_rate_deg_s);
@@ -1472,8 +1505,9 @@ void Main(intptr_t exinf)
                    (long)(steering * 10.0f));
 
             syslog(LOG_NOTICE,
-                   "FUSION IMU=%d GZx10=%ld EZx10=%ld DIFFx10=%ld FZx10=%ld Hx10=%ld X=%ld Y=%ld D=%ld V=%ld Kx1000=%ld",
+                   "FUSION IMU=%d USE=%d GZx10=%ld EZx10=%ld DIFFx10=%ld FZx10=%ld Hx10=%ld X=%ld Y=%ld D=%ld V=%ld Kx1000=%ld",
                    imu_available ? 1 : 0,
+                   imu_fusion_enabled ? 1 : 0,
                    (long)(odometry.gyro_yaw_rate_deg_s * 10.0f),
                    (long)(odometry.encoder_yaw_rate_deg_s * 10.0f),
                    (long)(odometry.yaw_rate_difference_deg_s * 10.0f),
