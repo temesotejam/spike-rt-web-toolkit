@@ -11,9 +11,12 @@
  *   開始・停止用フォースセンサー C
  *
  * モード選択:
- *   Hub左ボタン   -> ライントレース
- *   Hub右ボタン   -> 校正
- *   Hub中央ボタン -> 決定
+ *   Hub左・右ボタン -> ライントレース／校正／データ出力を選択
+ *   Hub中央ボタン   -> 決定
+ *
+ * 走行データ:
+ *   走行中のセンサー値・オドメトリ・EKF状態・モーター指令をRAMに記録。
+ *   走行終了後はモード選択画面に戻り、USBシリアルからCSV形式で出力可能。
  *
  * 校正時の機体配置:
  *   左右のカラーセンサーを白い面に置き、機体を進行方向と直角に交わる
@@ -43,6 +46,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <math.h>
+#include <stdio.h>
 #include <t_syslog.h>
 
 #include "PID_Line_Tracer_V2.h"
@@ -79,6 +83,7 @@
 
 /* 診断ログの出力頻度は、100Hzの制御ループより低くする */
 #define IMU_LOG_INTERVAL_TICKS  20U
+#define RUN_LOG_CAPACITY        512U
 
 /* Hubのモード選択ボタンを確認する周期 */
 #define MENU_POLL_US            20000U
@@ -175,8 +180,17 @@
 
 typedef enum {
     MODE_LINE_TRACE = 0,
-    MODE_CALIBRATION = 1
+    MODE_CALIBRATION = 1,
+    MODE_EXPORT_DATA = 2
 } app_mode_t;
+
+typedef enum {
+    RUN_END_NONE = 0,
+    RUN_END_RUNNING,
+    RUN_END_FORCE_SENSOR,
+    RUN_END_COLOR_SENSOR_ERROR,
+    RUN_END_MOTOR_ERROR
+} run_end_reason_t;
 
 typedef enum {
     CAL_SEEK_BLACK = 0,
@@ -254,8 +268,50 @@ typedef struct {
     float target_speed_deg_s;
 } course_map_reference_t;
 
+/* 1サンプル分の走行記録。浮動小数点値は出力時の扱いを簡単にするため
+ * 所定の倍率を掛けた整数として保持する。 */
+typedef struct {
+    uint32_t elapsed_ms;
+    int16_t raw_left;
+    int16_t raw_right;
+    int16_t normalized_left_x10;
+    int16_t normalized_right_x10;
+    int32_t line_error_x10;
+    int16_t steering_x10;
+    int16_t motor_left;
+    int16_t motor_right;
+    int32_t odom_x_mm;
+    int32_t odom_y_mm;
+    int32_t odom_distance_mm;
+    int16_t odom_heading_x10;
+    int16_t encoder_yaw_x10;
+    int16_t gyro_yaw_x10;
+    int16_t yaw_difference_x10;
+    int32_t ekf_s_mm;
+    int32_t ekf_ey_mm;
+    int16_t ekf_heading_x1000;
+    int16_t ekf_yaw_x10;
+    int16_t gyro_bias_x10;
+    int16_t curvature_x1000;
+    uint16_t sigma_ey_mm;
+    uint16_t sigma_heading_x1000;
+    uint8_t line_state;
+    uint8_t motion_state;
+    uint8_t line_update_accepted;
+    uint8_t reserved;
+} run_log_record_t;
+
 static volatile uint32_t control_tick_overruns = 0;
 static line_calibration_t saved_calibration = {0};
+static run_log_record_t run_log[RUN_LOG_CAPACITY];
+static uint32_t run_log_count = 0;
+static uint32_t run_log_write_index = 0;
+static uint32_t run_log_total_samples = 0;
+static uint32_t run_log_overwritten = 0;
+static bool latest_run_valid = false;
+static uint32_t latest_run_start_hrt = 0;
+static uint32_t latest_run_end_hrt = 0;
+static run_end_reason_t latest_run_end_reason = RUN_END_NONE;
 
 /* 浮動小数点値を指定範囲内に収める */
 static float clamp_float(float value, float lower, float upper)
@@ -268,6 +324,229 @@ static float clamp_float(float value, float lower, float upper)
     }
     return value;
 }
+
+static int16_t log_i16(float value)
+{
+    if (value > 32767.0f) {
+        return 32767;
+    }
+    if (value < -32768.0f) {
+        return -32768;
+    }
+    return (int16_t)value;
+}
+
+static uint16_t log_u16(float value)
+{
+    if (value < 0.0f) {
+        return 0;
+    }
+    if (value > 65535.0f) {
+        return 65535;
+    }
+    return (uint16_t)value;
+}
+
+static void clear_latest_run_log(void)
+{
+    run_log_count = 0;
+    run_log_write_index = 0;
+    run_log_total_samples = 0;
+    run_log_overwritten = 0;
+    latest_run_valid = false;
+    latest_run_start_hrt = 0;
+    latest_run_end_hrt = 0;
+    latest_run_end_reason = RUN_END_NONE;
+}
+
+static void append_run_log(
+    uint32_t now_hrt,
+    uint32_t run_start_hrt,
+    int32_t reflection_left,
+    int32_t reflection_right,
+    float normalized_left,
+    float normalized_right,
+    float line_error,
+    float steering,
+    int32_t motor_left,
+    int32_t motor_right,
+    const odometry_t *odometry,
+    const line_ekf_t *ekf,
+    line_state_t line_state,
+    motion_state_t motion_state,
+    bool line_update_accepted)
+{
+    run_log_record_t *record = &run_log[run_log_write_index];
+
+    record->elapsed_ms = (uint32_t)(now_hrt - run_start_hrt) / 1000U;
+    record->raw_left = (int16_t)reflection_left;
+    record->raw_right = (int16_t)reflection_right;
+    record->normalized_left_x10 = log_i16(normalized_left * 10.0f);
+    record->normalized_right_x10 = log_i16(normalized_right * 10.0f);
+    record->line_error_x10 = (int32_t)(line_error * 10.0f);
+    record->steering_x10 = log_i16(steering * 10.0f);
+    record->motor_left = log_i16((float)motor_left);
+    record->motor_right = log_i16((float)motor_right);
+    record->odom_x_mm = (int32_t)odometry->x_mm;
+    record->odom_y_mm = (int32_t)odometry->y_mm;
+    record->odom_distance_mm = (int32_t)odometry->distance_mm;
+    record->odom_heading_x10 =
+        log_i16(odometry->heading_rad * ODOM_RAD_TO_DEG * 10.0f);
+    record->encoder_yaw_x10 =
+        log_i16(odometry->encoder_yaw_rate_deg_s * 10.0f);
+    record->gyro_yaw_x10 =
+        log_i16(odometry->gyro_yaw_rate_deg_s * 10.0f);
+    record->yaw_difference_x10 =
+        log_i16(odometry->yaw_rate_difference_deg_s * 10.0f);
+    record->ekf_s_mm = (int32_t)ekf->x[EKF_S];
+    record->ekf_ey_mm = (int32_t)ekf->x[EKF_EY];
+    record->ekf_heading_x1000 =
+        log_i16(ekf->x[EKF_EPSI] * 1000.0f);
+    record->ekf_yaw_x10 =
+        log_i16(ekf->x[EKF_OMEGA] * ODOM_RAD_TO_DEG * 10.0f);
+    record->gyro_bias_x10 =
+        log_i16(ekf->x[EKF_GYRO_BIAS] * ODOM_RAD_TO_DEG * 10.0f);
+    record->curvature_x1000 =
+        log_i16(ekf->x[EKF_CURVATURE] * 1000.0f);
+    record->sigma_ey_mm =
+        log_u16(sqrtf(ekf->P[EKF_EY][EKF_EY]));
+    record->sigma_heading_x1000 =
+        log_u16(sqrtf(ekf->P[EKF_EPSI][EKF_EPSI]) * 1000.0f);
+    record->line_state = (uint8_t)line_state;
+    record->motion_state = (uint8_t)motion_state;
+    record->line_update_accepted = line_update_accepted ? 1U : 0U;
+    record->reserved = 0U;
+
+    run_log_write_index++;
+    if (run_log_write_index >= RUN_LOG_CAPACITY) {
+        run_log_write_index = 0;
+    }
+
+    if (run_log_count < RUN_LOG_CAPACITY) {
+        run_log_count++;
+    } else {
+        run_log_overwritten++;
+    }
+    run_log_total_samples++;
+}
+
+static const char *run_end_reason_name(run_end_reason_t reason)
+{
+    switch (reason) {
+    case RUN_END_RUNNING:            return "RUNNING";
+    case RUN_END_FORCE_SENSOR:       return "FORCE_SENSOR";
+    case RUN_END_COLOR_SENSOR_ERROR: return "COLOR_SENSOR_ERROR";
+    case RUN_END_MOTOR_ERROR:        return "MOTOR_ERROR";
+    case RUN_END_NONE:
+    default:                         return "NONE";
+    }
+}
+
+/* 走行終了後に、校正値・IMU校正値・直前の走行ログをCSV形式でUSBへ出力する。
+ * この処理は周期制御を停止した通常タスク上で実行する。 */
+static void export_latest_data(
+    const float gyro_bias[3],
+    const float gyro_stddev[3],
+    bool imu_available,
+    bool imu_fusion_enabled)
+{
+    dly_tsk(300000U);
+
+    printf("\r\n# PID_LINE_TRACER_V2_EXPORT,1\r\n");
+    printf("# CALIBRATION,valid=%d,white_left_x10=%ld,black_left_x10=%ld,"
+           "white_right_x10=%ld,black_right_x10=%ld\r\n",
+           saved_calibration.valid ? 1 : 0,
+           (long)(saved_calibration.white_left * 10.0f),
+           (long)(saved_calibration.black_left * 10.0f),
+           (long)(saved_calibration.white_right * 10.0f),
+           (long)(saved_calibration.black_right * 10.0f));
+
+    printf("# IMU,available=%d,fusion=%d,bias_x10=%ld,%ld,%ld,"
+           "stddev_x10=%ld,%ld,%ld\r\n",
+           imu_available ? 1 : 0,
+           imu_fusion_enabled ? 1 : 0,
+           (long)(gyro_bias[0] * 10.0f),
+           (long)(gyro_bias[1] * 10.0f),
+           (long)(gyro_bias[2] * 10.0f),
+           (long)(gyro_stddev[0] * 10.0f),
+           (long)(gyro_stddev[1] * 10.0f),
+           (long)(gyro_stddev[2] * 10.0f));
+
+    printf("# SETTINGS,wheel_diameter_mm=%d,wheel_track_mm=%d,"
+           "kp_x1000=%ld,ki_x1000=%ld,kd_x1000=%ld,"
+           "line_mm_per_percent_x1000=%ld\r\n",
+           (int)WHEEL_DIAMETER_MM,
+           (int)WHEEL_TRACK_MM,
+           (long)(KP * 1000.0f),
+           (long)(KI * 1000.0f),
+           (long)(KD * 1000.0f),
+           (long)(LINE_EKF_MM_PER_PERCENT * 1000.0f));
+
+    printf("# RUN,valid=%d,total_samples=%lu,stored_samples=%lu,"
+           "overwritten_samples=%lu,duration_ms=%lu,end_reason=%s\r\n",
+           latest_run_valid ? 1 : 0,
+           (unsigned long)run_log_total_samples,
+           (unsigned long)run_log_count,
+           (unsigned long)run_log_overwritten,
+           (unsigned long)((latest_run_end_hrt >= latest_run_start_hrt)
+               ? (latest_run_end_hrt - latest_run_start_hrt) / 1000U : 0U),
+           run_end_reason_name(latest_run_end_reason));
+
+    printf("# LINE_STATE,0=CENTERED,1=LEFT_EDGE,2=RIGHT_EDGE,"
+           "3=BOTH_DARK,4=TRANSITION\r\n");
+    printf("# MOTION_STATE,0=STRAIGHT,1=TURNING_LEFT,2=TURNING_RIGHT\r\n");
+    printf("DATA_BEGIN\r\n");
+    printf("elapsed_ms,raw_left,raw_right,norm_left_x10,norm_right_x10,"
+           "line_state,motion_state,line_update,error_x10,steering_x10,"
+           "motor_left,motor_right,odom_x_mm,odom_y_mm,odom_distance_mm,"
+           "odom_heading_x10,encoder_yaw_x10,gyro_yaw_x10,yaw_diff_x10,"
+           "ekf_s_mm,ekf_ey_mm,ekf_heading_x1000,ekf_yaw_x10,"
+           "gyro_bias_x10,curvature_x1000,sigma_ey_mm,sigma_heading_x1000\r\n");
+
+    if (latest_run_valid) {
+        const uint32_t oldest =
+            (run_log_count == RUN_LOG_CAPACITY) ? run_log_write_index : 0U;
+
+        for (uint32_t i = 0; i < run_log_count; i++) {
+            const uint32_t index = (oldest + i) % RUN_LOG_CAPACITY;
+            const run_log_record_t *record = &run_log[index];
+
+            printf("%lu,%d,%d,%d,%d,%u,%u,%u,%ld,%d,%d,%d,"
+                   "%ld,%ld,%ld,%d,%d,%d,%d,%ld,%ld,%d,%d,%d,%d,%u,%u\r\n",
+                   (unsigned long)record->elapsed_ms,
+                   (int)record->raw_left,
+                   (int)record->raw_right,
+                   (int)record->normalized_left_x10,
+                   (int)record->normalized_right_x10,
+                   (unsigned int)record->line_state,
+                   (unsigned int)record->motion_state,
+                   (unsigned int)record->line_update_accepted,
+                   (long)record->line_error_x10,
+                   (int)record->steering_x10,
+                   (int)record->motor_left,
+                   (int)record->motor_right,
+                   (long)record->odom_x_mm,
+                   (long)record->odom_y_mm,
+                   (long)record->odom_distance_mm,
+                   (int)record->odom_heading_x10,
+                   (int)record->encoder_yaw_x10,
+                   (int)record->gyro_yaw_x10,
+                   (int)record->yaw_difference_x10,
+                   (long)record->ekf_s_mm,
+                   (long)record->ekf_ey_mm,
+                   (int)record->ekf_heading_x1000,
+                   (int)record->ekf_yaw_x10,
+                   (int)record->gyro_bias_x10,
+                   (int)record->curvature_x1000,
+                   (unsigned int)record->sigma_ey_mm,
+                   (unsigned int)record->sigma_heading_x1000);
+        }
+    }
+
+    printf("DATA_END\r\n# EXPORT_COMPLETE\r\n");
+    fflush(stdout);
+}
+
 
 static int32_t clamp_int32(int32_t value, int32_t lower, int32_t upper)
 {
@@ -845,14 +1124,38 @@ static void wait_hub_buttons_released(void)
 /* 2つの動作モードから選択する。
  * 左ボタンでライントレース、右ボタンで校正を選び、中央ボタンで決定する。
  * ボタンの押下エッジを検出し、押しっぱなしで選択や決定が繰り返されないようにする。 */
+static void show_selected_mode(app_mode_t selected)
+{
+    if (selected == MODE_CALIBRATION) {
+        hub_display_char('C');
+    } else if (selected == MODE_EXPORT_DATA) {
+        hub_display_char('D');
+    } else {
+        hub_display_char('L');
+    }
+}
+
+static const char *selected_mode_name(app_mode_t selected)
+{
+    if (selected == MODE_CALIBRATION) {
+        return "CALIBRATION";
+    }
+    if (selected == MODE_EXPORT_DATA) {
+        return "DATA EXPORT";
+    }
+    return "LINE TRACE";
+}
+
+/* 左右ボタンで3つのモードを選び、中央ボタンで決定する。
+ * L=ライントレース、C=校正、D=走行・校正データのUSB出力。 */
 static app_mode_t select_mode(void)
 {
     app_mode_t selected = MODE_LINE_TRACE;
     uint32_t previous = 0;
 
-    hub_display_char('L');
+    show_selected_mode(selected);
     syslog(LOG_NOTICE,
-           "PID V2: LEFT=LINE TRACE, RIGHT=CALIBRATION, CENTER=SELECT");
+           "PID V2: LEFT/RIGHT=SELECT L/C/D, CENTER=CONFIRM");
 
     wait_hub_buttons_released();
 
@@ -877,19 +1180,29 @@ static app_mode_t select_mode(void)
             (previous & (uint32_t)HUB_BUTTON_CENTER) == 0U;
 
         if (left_rise) {
-            selected = MODE_LINE_TRACE;
-            hub_display_char('L');
-            syslog(LOG_NOTICE, "PID V2: mode selected LINE TRACE");
+            selected = (selected == MODE_LINE_TRACE)
+                ? MODE_EXPORT_DATA
+                : (app_mode_t)(selected - 1);
+            show_selected_mode(selected);
+            syslog(LOG_NOTICE,
+                   "PID V2: mode selected %s",
+                   selected_mode_name(selected));
         } else if (right_rise) {
-            selected = MODE_CALIBRATION;
-            hub_display_char('C');
-            syslog(LOG_NOTICE, "PID V2: mode selected CALIBRATION");
+            selected = (selected == MODE_EXPORT_DATA)
+                ? MODE_LINE_TRACE
+                : (app_mode_t)(selected + 1);
+            show_selected_mode(selected);
+            syslog(LOG_NOTICE,
+                   "PID V2: mode selected %s",
+                   selected_mode_name(selected));
         }
 
         previous = current;
 
         if (center_rise) {
-            syslog(LOG_NOTICE, "PID V2: mode confirmed");
+            syslog(LOG_NOTICE,
+                   "PID V2: mode confirmed %s",
+                   selected_mode_name(selected));
             return selected;
         }
 
@@ -1454,6 +1767,19 @@ void Main(intptr_t exinf)
             continue;
         }
 
+        if (selected == MODE_EXPORT_DATA) {
+            wait_hub_buttons_released();
+            hub_display_char('D');
+            syslog(LOG_NOTICE,
+                   "PID V2: exporting latest run and calibration data over USB");
+            export_latest_data(
+                gyro_bias, gyro_stddev, imu_available, imu_fusion_enabled);
+            hub_display_char('O');
+            dly_tsk(500000);
+            wait_hub_buttons_released();
+            continue;
+        }
+
         if (!saved_calibration.valid) {
             hub_display_char('C');
             syslog(LOG_WARNING,
@@ -1471,15 +1797,14 @@ void Main(intptr_t exinf)
             continue;
         }
 
-        break;
-    }
-
-    hub_display_char('L');
+        hub_display_char('L');
 
     bool running = false;
+    bool run_finished = false;
     bool button_armed = !pup_force_sensor_touched(start_stop_sensor);
     bool pid_initialized = false;
     bool overrun_warning_sent = false;
+    uint32_t run_start_hrt = 0;
 
     unsigned int pressed_samples = 0;
     unsigned int released_samples = 0;
@@ -1557,6 +1882,9 @@ void Main(intptr_t exinf)
 
                     if (running) {
                         running = false;
+                        run_finished = true;
+                        latest_run_end_reason = RUN_END_FORCE_SENSOR;
+                        latest_run_end_hrt = now_hrt;
                         pup_motor_brake(motor_left);
                         pup_motor_brake(motor_right);
 
@@ -1575,6 +1903,14 @@ void Main(intptr_t exinf)
                                (long)(odometry.heading_rad * ODOM_RAD_TO_DEG));
                     } else {
                         running = true;
+                        run_finished = false;
+                        clear_latest_run_log();
+                        latest_run_valid = true;
+                        latest_run_start_hrt = now_hrt;
+                        latest_run_end_hrt = 0;
+                        latest_run_end_reason = RUN_END_RUNNING;
+                        run_start_hrt = now_hrt;
+                        imu_log_ticks = 0;
 
                         integral = 0.0f;
                         last_error = 0.0f;
@@ -1605,6 +1941,10 @@ void Main(intptr_t exinf)
             } else {
                 released_samples = 0;
             }
+        }
+
+        if (run_finished) {
+            break;
         }
 
         /* IMUドライバが保持している最新の測定値を取得する。
@@ -1733,6 +2073,9 @@ void Main(intptr_t exinf)
             pup_motor_brake(motor_left);
             pup_motor_brake(motor_right);
             running = false;
+            run_finished = true;
+            latest_run_end_reason = RUN_END_COLOR_SENSOR_ERROR;
+            latest_run_end_hrt = now_hrt;
             pid_initialized = false;
             integral = 0.0f;
             derivative_filtered = 0.0f;
@@ -1916,6 +2259,9 @@ void Main(intptr_t exinf)
             pup_motor_brake(motor_left);
             pup_motor_brake(motor_right);
             running = false;
+            run_finished = true;
+            latest_run_end_reason = RUN_END_MOTOR_ERROR;
+            latest_run_end_hrt = now_hrt;
             pid_initialized = false;
             integral = 0.0f;
             derivative_filtered = 0.0f;
@@ -1932,6 +2278,24 @@ void Main(intptr_t exinf)
         imu_log_ticks++;
         if (imu_log_ticks >= IMU_LOG_INTERVAL_TICKS) {
             imu_log_ticks = 0;
+
+            append_run_log(
+                now_hrt,
+                run_start_hrt,
+                reflection_left,
+                reflection_right,
+                normalized_left,
+                normalized_right,
+                error,
+                steering,
+                left_speed,
+                right_speed,
+                &odometry,
+                &line_ekf,
+                line_state,
+                motion_state,
+                line_observation_accepted
+            );
 
             syslog(LOG_NOTICE,
                    "TRACE t=%ld LS=%s MS=%s RAW=%ld,%ld NORMx10=%ld,%ld ERRx10=%ld STEERx10=%ld",
@@ -1978,5 +2342,16 @@ void Main(intptr_t exinf)
         }
 
         last_error = error;
+    }
+
+    stop_control_clock();
+    pup_motor_brake(motor_left);
+    pup_motor_brake(motor_right);
+    hub_display_char('M');
+    syslog(LOG_NOTICE,
+           "PID V2: run finished; return to menu; samples=%lu overwritten=%lu",
+           (unsigned long)run_log_count,
+           (unsigned long)run_log_overwritten);
+    wait_hub_buttons_released();
     }
 }
