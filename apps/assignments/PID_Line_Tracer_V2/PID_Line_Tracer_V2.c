@@ -42,7 +42,7 @@
  *   - 将来、コースマップから曲率と目標速度を取得できる接続口を用意。
  *   - 生の観測値、3軸IMU、EKFの状態と共分散を5Hzで記録。
  *   - 直前の走行データと校正データをUSBシリアルへCSV出力。
- *   - フォースセンサーCの2.5秒長押しでモーターを停止してプログラムを終了。
+ *   - フォースセンサーCの2.5秒長押しで、全モードからプログラムを終了。
  *   - IMU初期化または静止校正の品質が不十分な場合はエンコーダのみで動作。
  */
 
@@ -474,17 +474,40 @@ static const char *run_end_reason_name(run_end_reason_t reason)
 
 /* 走行終了後に、校正値・IMU校正値・直前の走行ログをCSV形式でUSBへ出力する。
  * この処理は周期制御を停止した通常タスク上で実行する。 */
-static void export_latest_data(
+static bool export_latest_data(
     const float gyro_bias[3],
     const float gyro_stddev[3],
     bool imu_available,
-    bool imu_fusion_enabled)
+    bool imu_fusion_enabled,
+    pup_device_t *start_stop_sensor)
 {
+    force_press_state_t force_press = {0};
+    (void)update_force_press(
+        &force_press,
+        pup_force_sensor_touched(start_stop_sensor),
+        (uint32_t)fch_hrt()
+    );
     dly_tsk(300000U);
+    if (update_force_press(
+            &force_press,
+            pup_force_sensor_touched(start_stop_sensor),
+            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
+        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
+        fflush(stdout);
+        return true;
+    }
 
     printf("\r\n# PID_LINE_TRACER_V2_EXPORT,1\r\n");
     fflush(stdout);
     dly_tsk(20000U);
+    if (update_force_press(
+            &force_press,
+            pup_force_sensor_touched(start_stop_sensor),
+            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
+        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
+        fflush(stdout);
+        return true;
+    }
     printf("# CALIBRATION,valid=%d,white_left_x10=%ld,black_left_x10=%ld,"
            "white_right_x10=%ld,black_right_x10=%ld\r\n",
            saved_calibration.valid ? 1 : 0,
@@ -494,6 +517,14 @@ static void export_latest_data(
            (long)(saved_calibration.black_right * 10.0f));
     fflush(stdout);
     dly_tsk(20000U);
+    if (update_force_press(
+            &force_press,
+            pup_force_sensor_touched(start_stop_sensor),
+            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
+        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
+        fflush(stdout);
+        return true;
+    }
 
     printf("# IMU,available=%d,fusion=%d,bias_x10=%ld,%ld,%ld,"
            "stddev_x10=%ld,%ld,%ld\r\n",
@@ -507,6 +538,14 @@ static void export_latest_data(
            (long)(gyro_stddev[2] * 10.0f));
     fflush(stdout);
     dly_tsk(20000U);
+    if (update_force_press(
+            &force_press,
+            pup_force_sensor_touched(start_stop_sensor),
+            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
+        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
+        fflush(stdout);
+        return true;
+    }
 
     printf("# SETTINGS,wheel_diameter_mm=%d,wheel_track_mm=%d,"
            "kp_x1000=%ld,ki_x1000=%ld,kd_x1000=%ld,"
@@ -519,6 +558,14 @@ static void export_latest_data(
            (long)(LINE_EKF_MM_PER_PERCENT * 1000.0f));
     fflush(stdout);
     dly_tsk(20000U);
+    if (update_force_press(
+            &force_press,
+            pup_force_sensor_touched(start_stop_sensor),
+            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
+        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
+        fflush(stdout);
+        return true;
+    }
 
     printf("# RUN,valid=%d,total_samples=%lu,stored_samples=%lu,"
            "overwritten_samples=%lu,duration_ms=%lu,end_reason=%s\r\n",
@@ -531,27 +578,67 @@ static void export_latest_data(
            run_end_reason_name(latest_run_end_reason));
     fflush(stdout);
     dly_tsk(20000U);
+    if (update_force_press(
+            &force_press,
+            pup_force_sensor_touched(start_stop_sensor),
+            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
+        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
+        fflush(stdout);
+        return true;
+    }
 
     printf("# LINE_STATE,0=CENTERED,1=LEFT_EDGE,2=RIGHT_EDGE,"
            "3=BOTH_DARK,4=TRANSITION\r\n");
     printf("# MOTION_STATE,0=STRAIGHT,1=TURNING_LEFT,2=TURNING_RIGHT\r\n");
     fflush(stdout);
     dly_tsk(20000U);
+    if (update_force_press(
+            &force_press,
+            pup_force_sensor_touched(start_stop_sensor),
+            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
+        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
+        fflush(stdout);
+        return true;
+    }
     printf("DATA_BEGIN\r\n");
     fflush(stdout);
     dly_tsk(20000U);
+    if (update_force_press(
+            &force_press,
+            pup_force_sensor_touched(start_stop_sensor),
+            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
+        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
+        fflush(stdout);
+        return true;
+    }
     printf("elapsed_ms,raw_left,raw_right,norm_left_x10,norm_right_x10,"
            "line_state,motion_state,line_update,error_x10,steering_x10,"
            "motor_left,motor_right,odom_x_mm,odom_y_mm,odom_distance_mm,"
            "odom_heading_x10,encoder_yaw_x10,gyro_yaw_x10,yaw_diff_x10,");
     fflush(stdout);
     dly_tsk(20000U);
+    if (update_force_press(
+            &force_press,
+            pup_force_sensor_touched(start_stop_sensor),
+            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
+        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
+        fflush(stdout);
+        return true;
+    }
     printf("ekf_s_mm,ekf_ey_mm,ekf_heading_x1000,ekf_yaw_x10,"
            "gyro_bias_x10,curvature_x1000,sigma_ey_mm,sigma_heading_x1000,"
            "accel_x_mm_s2,accel_y_mm_s2,accel_z_mm_s2,"
            "gyro_x_x10,gyro_y_x10,gyro_z_raw_x10\r\n");
     fflush(stdout);
     dly_tsk(20000U);
+    if (update_force_press(
+            &force_press,
+            pup_force_sensor_touched(start_stop_sensor),
+            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
+        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
+        fflush(stdout);
+        return true;
+    }
 
     if (latest_run_valid) {
         const uint32_t oldest =
@@ -599,11 +686,20 @@ static void export_latest_data(
                    (int)record->angular_velocity_x10[2]);
             fflush(stdout);
             dly_tsk(20000U);
+    if (update_force_press(
+            &force_press,
+            pup_force_sensor_touched(start_stop_sensor),
+            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
+        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
+        fflush(stdout);
+        return true;
+    }
         }
     }
 
     printf("DATA_END\r\n# EXPORT_COMPLETE\r\n");
     fflush(stdout);
+    return false;
 }
 
 
@@ -1925,8 +2021,19 @@ void Main(intptr_t exinf)
         if (selected == MODE_EXPORT_DATA) {
             wait_hub_buttons_released();
             hub_display_char('D');
-            export_latest_data(
-                gyro_bias, gyro_stddev, imu_available, imu_fusion_enabled);
+            const bool exit_requested = export_latest_data(
+                gyro_bias,
+                gyro_stddev,
+                imu_available,
+                imu_fusion_enabled,
+                start_stop_sensor
+            );
+            if (exit_requested) {
+                pup_motor_brake(motor_left);
+                pup_motor_brake(motor_right);
+                hub_display_char('E');
+                ext_tsk();
+            }
             hub_display_char('O');
             dly_tsk(500000);
             wait_hub_buttons_released();
