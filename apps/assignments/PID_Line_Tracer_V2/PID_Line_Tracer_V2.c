@@ -296,7 +296,7 @@ typedef struct {
     int16_t curvature_x1000;
     uint16_t sigma_ey_mm;
     uint16_t sigma_heading_x1000;
-    int16_t acceleration_x10[3];
+    int32_t acceleration_mm_s2[3];
     int16_t angular_velocity_x10[3];
     uint8_t line_state;
     uint8_t motion_state;
@@ -418,8 +418,8 @@ static void append_run_log(
     record->sigma_heading_x1000 =
         log_u16(sqrtf(ekf->P[EKF_EPSI][EKF_EPSI]) * 1000.0f);
     for (unsigned int axis = 0; axis < 3; axis++) {
-        record->acceleration_x10[axis] =
-            log_i16(acceleration[axis] * 10.0f);
+        record->acceleration_mm_s2[axis] =
+            (int32_t)acceleration[axis];
         record->angular_velocity_x10[axis] =
             log_i16(angular_velocity[axis] * 10.0f);
     }
@@ -499,7 +499,7 @@ static void export_latest_data(
            (unsigned long)run_log_total_samples,
            (unsigned long)run_log_count,
            (unsigned long)run_log_overwritten,
-           (unsigned long)((latest_run_end_hrt >= latest_run_start_hrt)
+           (unsigned long)(latest_run_valid
                ? (latest_run_end_hrt - latest_run_start_hrt) / 1000U : 0U),
            run_end_reason_name(latest_run_end_reason));
 
@@ -510,11 +510,15 @@ static void export_latest_data(
     printf("elapsed_ms,raw_left,raw_right,norm_left_x10,norm_right_x10,"
            "line_state,motion_state,line_update,error_x10,steering_x10,"
            "motor_left,motor_right,odom_x_mm,odom_y_mm,odom_distance_mm,"
-           "odom_heading_x10,encoder_yaw_x10,gyro_yaw_x10,yaw_diff_x10,"
-           "ekf_s_mm,ekf_ey_mm,ekf_heading_x1000,ekf_yaw_x10,"
+           "odom_heading_x10,encoder_yaw_x10,gyro_yaw_x10,yaw_diff_x10,");
+    fflush(stdout);
+    dly_tsk(20000U);
+    printf("ekf_s_mm,ekf_ey_mm,ekf_heading_x1000,ekf_yaw_x10,"
            "gyro_bias_x10,curvature_x1000,sigma_ey_mm,sigma_heading_x1000,"
-           "accel_x_x10,accel_y_x10,accel_z_x10,"
+           "accel_x_mm_s2,accel_y_mm_s2,accel_z_mm_s2,"
            "gyro_x_x10,gyro_y_x10,gyro_z_raw_x10\r\n");
+    fflush(stdout);
+    dly_tsk(20000U);
 
     if (latest_run_valid) {
         const uint32_t oldest =
@@ -526,7 +530,7 @@ static void export_latest_data(
 
             printf("%lu,%d,%d,%d,%d,%u,%u,%u,%ld,%d,%d,%d,"
                    "%ld,%ld,%ld,%d,%d,%d,%d,%ld,%ld,%d,%d,%d,%d,%u,%u,"
-                   "%d,%d,%d,%d,%d,%d\r\n",
+                   "%ld,%ld,%ld,%d,%d,%d\r\n",
                    (unsigned long)record->elapsed_ms,
                    (int)record->raw_left,
                    (int)record->raw_right,
@@ -554,12 +558,14 @@ static void export_latest_data(
                    (int)record->curvature_x1000,
                    (unsigned int)record->sigma_ey_mm,
                    (unsigned int)record->sigma_heading_x1000,
-                   (int)record->acceleration_x10[0],
-                   (int)record->acceleration_x10[1],
-                   (int)record->acceleration_x10[2],
+                   (long)record->acceleration_mm_s2[0],
+                   (long)record->acceleration_mm_s2[1],
+                   (long)record->acceleration_mm_s2[2],
                    (int)record->angular_velocity_x10[0],
                    (int)record->angular_velocity_x10[1],
                    (int)record->angular_velocity_x10[2]);
+            fflush(stdout);
+            dly_tsk(20000U);
         }
     }
 
