@@ -31,8 +31,11 @@
  *   - Filtered derivative and conditional integral anti-windup.
  *   - Adaptive base speed and bounded wheel commands.
  *   - Built-in IMU initialization and stationary gyro-bias/noise calibration.
- *   - 85/15 IMU-gyro/encoder yaw fusion for heading, motion state and steering.
- *   - 5 Hz logs compare both yaw sources and record fused pose/control state.
+ *   - Six-state EKF uses IMU gyro, encoder yaw and line observations.
+ *   - EKF estimates local along-track position, cross-track error, heading
+ *     error, yaw rate, gyro bias and local path curvature.
+ *   - A future course-map hook can provide curvature and target speed.
+ *   - 5 Hz logs record raw observations, EKF state and covariance.
  *   - Encoder-only fallback if IMU initialization or stationary calibration
  *     quality is inadequate.
  */
@@ -123,10 +126,45 @@
 #define ODOM_YAW_RATE_THRESHOLD  8.0f
 #define ODOM_YAW_RATE_FULL       60.0f
 #define ODOM_YAW_DAMPING_GAIN    0.15f
-#define ODOM_YAW_FILTER_TAU_S    0.050f
-#define ODOM_GYRO_WEIGHT         0.85f
-#define ODOM_ENCODER_WEIGHT      (1.0f - ODOM_GYRO_WEIGHT)
 #define IMU_ENCODER_DISAGREE_DPS 35.0f
+
+/* Six-state local path-relative EKF:
+ * [s, cross_track, heading_error, yaw_rate, gyro_bias, path_curvature].
+ * Units: mm, mm, rad, rad/s, rad/s, 1/m.
+ */
+#define EKF_STATE_DIM            6U
+#define EKF_S                    0U
+#define EKF_EY                   1U
+#define EKF_EPSI                 2U
+#define EKF_OMEGA                3U
+#define EKF_GYRO_BIAS            4U
+#define EKF_CURVATURE            5U
+#define EKF_INNOVATION_GATE2     16.0f
+
+/* Initial measurement models; tune LINE_EKF_MM_PER_PERCENT after measuring
+ * the actual B/F sensor spacing and the course line width. */
+#define LINE_EKF_MM_PER_PERCENT  0.10f
+#define LINE_EKF_MIN_DIFF        4.0f
+#define LINE_EKF_CENTER_GATE_MM  20.0f
+#define LINE_EKF_R_EDGE_MM2      25.0f
+#define LINE_EKF_R_TRANSITION_MM2 100.0f
+#define LINE_EKF_R_CENTER_MM2    400.0f
+#define LINE_EKF_HEADING_LOOKAHEAD_MM 35.0f
+#define LINE_EKF_MAX_SIGMA_MM    20.0f
+#define LINE_EKF_MAX_SIGMA_HEADING_RAD 0.35f
+
+/* Measurement standard deviations. Startup gyro noise is also included. */
+#define EKF_GYRO_STD_DPS         3.0f
+#define EKF_ENCODER_STD_DPS      12.0f
+#define EKF_MAP_CURVATURE_STD_PER_M 0.10f
+
+/* Continuous-time process-noise intensities. */
+#define EKF_Q_S_MM2_PER_S        4.0f
+#define EKF_Q_EY_MM2_PER_S       9.0f
+#define EKF_Q_EPSI_RAD2_PER_S    0.0004f
+#define EKF_Q_OMEGA_RAD2_PER_S   0.0100f
+#define EKF_Q_BIAS_RAD2_PER_S    0.000001f
+#define EKF_Q_CURVATURE_PER_M2_PER_S 0.05f
 
 /* Normalized reflectance state thresholds (black=0, white=100). */
 #define LINE_DARK_THRESHOLD      45.0f
@@ -197,10 +235,25 @@ typedef struct {
     float encoder_yaw_rate_deg_s;
     float gyro_yaw_rate_deg_s;
     float yaw_rate_difference_deg_s;
-    float yaw_rate_deg_s; /* fused yaw rate */
+    float yaw_rate_deg_s; /* EKF estimate */
     float curvature_per_m;
     bool initialized;
 } odometry_t;
+
+typedef struct {
+    float x[EKF_STATE_DIM];
+    float P[EKF_STATE_DIM][EKF_STATE_DIM];
+    uint32_t rejected_line_updates;
+    bool initialized;
+} line_ekf_t;
+
+/* The route map is intentionally not loaded yet. Later, a course-map module
+ * can return curvature and a speed limit at the EKF's along-track position. */
+typedef struct {
+    bool valid;
+    float curvature_per_m;
+    float target_speed_deg_s;
+} course_map_reference_t;
 
 static volatile uint32_t control_tick_overruns = 0;
 static line_calibration_t saved_calibration = {0};
@@ -287,14 +340,14 @@ static void reset_odometry(odometry_t *odometry)
  * wheel-center spacing. Positive yaw is a left turn for both sources:
  * (right wheel travel - left wheel travel) / track width.
  */
+/* Encoder-only differential-drive odometry.
+ * This remains an independent dead-reckoning reference for EKF diagnostics.
+ * The EKF below estimates local line-relative position and fused yaw. */
 static void update_odometry(
     odometry_t *odometry,
     pup_motor_t *motor_left,
     pup_motor_t *motor_right,
-    float dt,
-    float gyro_z_deg_s,
-    bool imu_available,
-    bool imu_fusion_enabled)
+    float dt)
 {
     const int32_t left_count = pup_motor_get_count(motor_left);
     const int32_t right_count = pup_motor_get_count(motor_right);
@@ -302,7 +355,6 @@ static void update_odometry(
     const float mm_per_degree =
         (ODOM_PI * WHEEL_DIAMETER_MM) / 360.0f;
 
-    /* Motor speed is the API's measured encoder-derived speed [deg/s]. */
     const float left_speed_mm_s =
         (float)pup_motor_get_speed(motor_left) * mm_per_degree;
     const float right_speed_mm_s =
@@ -311,26 +363,13 @@ static void update_odometry(
     odometry->linear_speed_mm_s =
         (left_speed_mm_s + right_speed_mm_s) * 0.5f;
 
-    const float encoder_yaw_rate =
+    odometry->encoder_yaw_rate_deg_s =
         ((right_speed_mm_s - left_speed_mm_s) / WHEEL_TRACK_MM) *
         ODOM_RAD_TO_DEG;
-
-    odometry->encoder_yaw_rate_deg_s = encoder_yaw_rate;
-    odometry->gyro_yaw_rate_deg_s =
-        imu_available ? gyro_z_deg_s : 0.0f;
-    odometry->yaw_rate_difference_deg_s =
-        imu_available ? gyro_z_deg_s - encoder_yaw_rate : 0.0f;
-
-    const float fused_yaw_rate_raw = imu_fusion_enabled
-        ? (ODOM_GYRO_WEIGHT * gyro_z_deg_s +
-           ODOM_ENCODER_WEIGHT * encoder_yaw_rate)
-        : encoder_yaw_rate;
 
     if (!odometry->initialized) {
         odometry->previous_left_count = left_count;
         odometry->previous_right_count = right_count;
-        odometry->yaw_rate_deg_s = fused_yaw_rate_raw;
-        odometry->curvature_per_m = 0.0f;
         odometry->initialized = true;
         return;
     }
@@ -350,25 +389,15 @@ static void update_odometry(
 
     const float delta_distance =
         (delta_left_mm + delta_right_mm) * 0.5f;
-    const float delta_heading_encoder =
+    const float delta_heading =
         (delta_right_mm - delta_left_mm) / WHEEL_TRACK_MM;
-
-    /* Integrate the gyro and encoder heading increments with the same
-     * complementary weights used for yaw-rate fusion. */
-    const float delta_heading_gyro =
-        gyro_z_deg_s * dt / ODOM_RAD_TO_DEG;
-    const float delta_heading_fused = imu_fusion_enabled
-        ? (ODOM_GYRO_WEIGHT * delta_heading_gyro +
-           ODOM_ENCODER_WEIGHT * delta_heading_encoder)
-        : delta_heading_encoder;
-
     const float midpoint_heading =
-        odometry->heading_rad + delta_heading_fused * 0.5f;
+        odometry->heading_rad + delta_heading * 0.5f;
 
     odometry->x_mm += delta_distance * cosf(midpoint_heading);
     odometry->y_mm += delta_distance * sinf(midpoint_heading);
     odometry->distance_mm += delta_distance;
-    odometry->heading_rad += delta_heading_fused;
+    odometry->heading_rad += delta_heading;
 
     while (odometry->heading_rad > ODOM_PI) {
         odometry->heading_rad -= 2.0f * ODOM_PI;
@@ -377,29 +406,341 @@ static void update_odometry(
         odometry->heading_rad += 2.0f * ODOM_PI;
     }
 
-    /* Smooth the fused rate used by motion classification and steering. */
-    if (dt > 0.0f) {
-        const float filter_alpha =
-            dt / (ODOM_YAW_FILTER_TAU_S + dt);
-
-        odometry->yaw_rate_deg_s +=
-            filter_alpha *
-            (fused_yaw_rate_raw - odometry->yaw_rate_deg_s);
-    } else {
-        odometry->yaw_rate_deg_s = fused_yaw_rate_raw;
-    }
-
     const float linear_speed_m_s =
         odometry->linear_speed_mm_s / 1000.0f;
 
     if (fabsf(linear_speed_m_s) > 0.005f) {
-        const float yaw_rate_rad_s =
-            odometry->yaw_rate_deg_s / ODOM_RAD_TO_DEG;
+        const float encoder_yaw_rad_s =
+            odometry->encoder_yaw_rate_deg_s / ODOM_RAD_TO_DEG;
         odometry->curvature_per_m =
-            yaw_rate_rad_s / linear_speed_m_s;
+            encoder_yaw_rad_s / linear_speed_m_s;
     } else {
         odometry->curvature_per_m = 0.0f;
     }
+
+    (void)dt;
+}
+
+/* Wrap an angle into [-pi, pi]. */
+static float wrap_angle_rad(float angle)
+{
+    while (angle > ODOM_PI) {
+        angle -= 2.0f * ODOM_PI;
+    }
+    while (angle < -ODOM_PI) {
+        angle += 2.0f * ODOM_PI;
+    }
+    return angle;
+}
+
+/* Initialize the local path-relative EKF. The initial pose assumes the robot
+ * is placed approximately on the line and aligned with its local tangent.
+ * Covariance is deliberately non-zero because this is only an initial guess. */
+static void line_ekf_reset(line_ekf_t *ekf, float initial_gyro_bias_dps)
+{
+    for (unsigned int i = 0; i < EKF_STATE_DIM; i++) {
+        ekf->x[i] = 0.0f;
+        for (unsigned int j = 0; j < EKF_STATE_DIM; j++) {
+            ekf->P[i][j] = 0.0f;
+        }
+    }
+
+    ekf->x[EKF_GYRO_BIAS] =
+        initial_gyro_bias_dps / ODOM_RAD_TO_DEG;
+
+    ekf->P[EKF_S][EKF_S] = 10000.0f; /* 100 mm standard deviation */
+    ekf->P[EKF_EY][EKF_EY] = 225.0f; /* 15 mm */
+    ekf->P[EKF_EPSI][EKF_EPSI] = 0.12185f; /* 20 deg */
+    ekf->P[EKF_OMEGA][EKF_OMEGA] = 0.12185f; /* 20 deg/s */
+    ekf->P[EKF_GYRO_BIAS][EKF_GYRO_BIAS] = 0.002742f; /* 3 deg/s */
+    ekf->P[EKF_CURVATURE][EKF_CURVATURE] = 0.25f; /* 0.5 1/m */
+
+    ekf->rejected_line_updates = 0;
+    ekf->initialized = true;
+}
+
+/* EKF prediction in a local route frame.
+ * s: along-track distance; ey: cross-track offset; epsi: heading error.
+ * The curvature state is estimated now; a future course map can correct it. */
+static void line_ekf_predict(
+    line_ekf_t *ekf,
+    float linear_speed_mm_s,
+    float dt)
+{
+    if (!ekf->initialized || dt <= 0.0f) {
+        return;
+    }
+
+    const float heading_error = ekf->x[EKF_EPSI];
+    const float speed_m_s = linear_speed_mm_s / 1000.0f;
+    const float path_yaw_rate =
+        speed_m_s * ekf->x[EKF_CURVATURE];
+
+    ekf->x[EKF_S] +=
+        linear_speed_mm_s * cosf(heading_error) * dt;
+    ekf->x[EKF_EY] +=
+        linear_speed_mm_s * sinf(heading_error) * dt;
+    ekf->x[EKF_EPSI] +=
+        (ekf->x[EKF_OMEGA] - path_yaw_rate) * dt;
+    ekf->x[EKF_EPSI] = wrap_angle_rad(ekf->x[EKF_EPSI]);
+
+    float F[EKF_STATE_DIM][EKF_STATE_DIM] = {{0.0f}};
+    for (unsigned int i = 0; i < EKF_STATE_DIM; i++) {
+        F[i][i] = 1.0f;
+    }
+
+    F[EKF_S][EKF_EPSI] =
+        -linear_speed_mm_s * sinf(heading_error) * dt;
+    F[EKF_EY][EKF_EPSI] =
+        linear_speed_mm_s * cosf(heading_error) * dt;
+    F[EKF_EPSI][EKF_OMEGA] = dt;
+    F[EKF_EPSI][EKF_CURVATURE] = -speed_m_s * dt;
+
+    float FP[EKF_STATE_DIM][EKF_STATE_DIM] = {{0.0f}};
+    float nextP[EKF_STATE_DIM][EKF_STATE_DIM] = {{0.0f}};
+
+    for (unsigned int i = 0; i < EKF_STATE_DIM; i++) {
+        for (unsigned int j = 0; j < EKF_STATE_DIM; j++) {
+            for (unsigned int k = 0; k < EKF_STATE_DIM; k++) {
+                FP[i][j] += F[i][k] * ekf->P[k][j];
+            }
+        }
+    }
+
+    for (unsigned int i = 0; i < EKF_STATE_DIM; i++) {
+        for (unsigned int j = 0; j < EKF_STATE_DIM; j++) {
+            for (unsigned int k = 0; k < EKF_STATE_DIM; k++) {
+                nextP[i][j] += FP[i][k] * F[j][k];
+            }
+        }
+    }
+
+    nextP[EKF_S][EKF_S] += EKF_Q_S_MM2_PER_S * dt;
+    nextP[EKF_EY][EKF_EY] += EKF_Q_EY_MM2_PER_S * dt;
+    nextP[EKF_EPSI][EKF_EPSI] += EKF_Q_EPSI_RAD2_PER_S * dt;
+    nextP[EKF_OMEGA][EKF_OMEGA] += EKF_Q_OMEGA_RAD2_PER_S * dt;
+    nextP[EKF_GYRO_BIAS][EKF_GYRO_BIAS] += EKF_Q_BIAS_RAD2_PER_S * dt;
+    nextP[EKF_CURVATURE][EKF_CURVATURE] +=
+        EKF_Q_CURVATURE_PER_M2_PER_S * dt;
+
+    for (unsigned int i = 0; i < EKF_STATE_DIM; i++) {
+        for (unsigned int j = 0; j < EKF_STATE_DIM; j++) {
+            ekf->P[i][j] = nextP[i][j];
+        }
+    }
+}
+
+/* Scalar EKF observation update with a Joseph-form covariance update.
+ * H is the observation Jacobian, z is the measurement, h is its prediction. */
+static bool line_ekf_scalar_update(
+    line_ekf_t *ekf,
+    const float H[EKF_STATE_DIM],
+    float measurement,
+    float predicted_measurement,
+    float measurement_variance)
+{
+    float PHt[EKF_STATE_DIM] = {0.0f};
+    float innovation_variance = measurement_variance;
+
+    for (unsigned int i = 0; i < EKF_STATE_DIM; i++) {
+        for (unsigned int j = 0; j < EKF_STATE_DIM; j++) {
+            PHt[i] += ekf->P[i][j] * H[j];
+        }
+        innovation_variance += H[i] * PHt[i];
+    }
+
+    if (innovation_variance <= 1.0e-9f) {
+        return false;
+    }
+
+    const float innovation = measurement - predicted_measurement;
+    if ((innovation * innovation) >
+        EKF_INNOVATION_GATE2 * innovation_variance) {
+        return false;
+    }
+
+    float K[EKF_STATE_DIM];
+    for (unsigned int i = 0; i < EKF_STATE_DIM; i++) {
+        K[i] = PHt[i] / innovation_variance;
+        ekf->x[i] += K[i] * innovation;
+    }
+    ekf->x[EKF_EPSI] = wrap_angle_rad(ekf->x[EKF_EPSI]);
+
+    float A[EKF_STATE_DIM][EKF_STATE_DIM] = {{0.0f}};
+    float AP[EKF_STATE_DIM][EKF_STATE_DIM] = {{0.0f}};
+    float nextP[EKF_STATE_DIM][EKF_STATE_DIM] = {{0.0f}};
+
+    for (unsigned int i = 0; i < EKF_STATE_DIM; i++) {
+        for (unsigned int j = 0; j < EKF_STATE_DIM; j++) {
+            A[i][j] = (i == j ? 1.0f : 0.0f) - K[i] * H[j];
+        }
+    }
+
+    for (unsigned int i = 0; i < EKF_STATE_DIM; i++) {
+        for (unsigned int j = 0; j < EKF_STATE_DIM; j++) {
+            for (unsigned int k = 0; k < EKF_STATE_DIM; k++) {
+                AP[i][j] += A[i][k] * ekf->P[k][j];
+            }
+        }
+    }
+
+    for (unsigned int i = 0; i < EKF_STATE_DIM; i++) {
+        for (unsigned int j = 0; j < EKF_STATE_DIM; j++) {
+            for (unsigned int k = 0; k < EKF_STATE_DIM; k++) {
+                nextP[i][j] += AP[i][k] * A[j][k];
+            }
+            nextP[i][j] += K[i] * measurement_variance * K[j];
+        }
+    }
+
+    /* Enforce numerical symmetry and keep diagonal variances positive. */
+    for (unsigned int i = 0; i < EKF_STATE_DIM; i++) {
+        for (unsigned int j = i; j < EKF_STATE_DIM; j++) {
+            const float symmetric =
+                0.5f * (nextP[i][j] + nextP[j][i]);
+            ekf->P[i][j] = symmetric;
+            ekf->P[j][i] = symmetric;
+        }
+        if (ekf->P[i][i] < 1.0e-9f) {
+            ekf->P[i][i] = 1.0e-9f;
+        }
+    }
+
+    return true;
+}
+
+/* IMU observation: raw gyro Z = body yaw rate + gyro bias. */
+static bool line_ekf_update_gyro(
+    line_ekf_t *ekf,
+    float gyro_z_raw_dps,
+    float gyro_noise_std_dps)
+{
+    const float H[EKF_STATE_DIM] = {
+        0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f
+    };
+    const float measurement =
+        gyro_z_raw_dps / ODOM_RAD_TO_DEG;
+    const float predicted =
+        ekf->x[EKF_OMEGA] + ekf->x[EKF_GYRO_BIAS];
+    const float sigma_dps =
+        gyro_noise_std_dps > 1.0f ? gyro_noise_std_dps : 1.0f;
+    const float sigma_rad_s =
+        sigma_dps / ODOM_RAD_TO_DEG;
+
+    return line_ekf_scalar_update(
+        ekf, H, measurement, predicted,
+        sigma_rad_s * sigma_rad_s
+    );
+}
+
+/* Encoder observation: differential wheel speed is an independent yaw-rate
+ * measurement. Its variance is increased when wheel/gyro disagreement grows. */
+static bool line_ekf_update_encoder(
+    line_ekf_t *ekf,
+    float encoder_yaw_rate_dps,
+    float disagreement_dps)
+{
+    const float H[EKF_STATE_DIM] = {
+        0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f
+    };
+    const float measurement =
+        encoder_yaw_rate_dps / ODOM_RAD_TO_DEG;
+    const float predicted = ekf->x[EKF_OMEGA];
+
+    float sigma_dps = EKF_ENCODER_STD_DPS;
+    if (disagreement_dps > 15.0f) {
+        const float scale =
+            1.0f + clamp_float(disagreement_dps / 30.0f, 0.0f, 3.0f);
+        sigma_dps *= scale;
+    }
+
+    const float sigma_rad_s =
+        sigma_dps / ODOM_RAD_TO_DEG;
+
+    return line_ekf_scalar_update(
+        ekf, H, measurement, predicted,
+        sigma_rad_s * sigma_rad_s
+    );
+}
+
+/* Line observation from the two calibrated reflectance sensors.
+ * The differential is converted to a provisional lateral offset. This is
+ * intentionally a tunable pseudo-measurement until sensor spacing and line
+ * width are measured and a geometric sensor model is added.
+ *
+ * Both-dark is ambiguous and is rejected. Both-white is a weak zero-offset
+ * observation only while the predicted track offset remains near the pair. */
+static bool line_ekf_update_line(
+    line_ekf_t *ekf,
+    float normalized_left,
+    float normalized_right,
+    line_state_t line_state)
+{
+    const float H[EKF_STATE_DIM] = {
+        0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f
+    };
+    const float reflectance_difference =
+        normalized_left - normalized_right;
+    const float measurement =
+        reflectance_difference * LINE_EKF_MM_PER_PERCENT;
+
+    float variance;
+
+    if (line_state == LINE_STATE_BOTH_DARK) {
+        return false;
+    } else if (line_state == LINE_STATE_LEFT_EDGE ||
+               line_state == LINE_STATE_RIGHT_EDGE) {
+        variance = LINE_EKF_R_EDGE_MM2;
+    } else if (line_state == LINE_STATE_TRANSITION) {
+        if (fabsf(reflectance_difference) < LINE_EKF_MIN_DIFF) {
+            return false;
+        }
+        variance = LINE_EKF_R_TRANSITION_MM2;
+    } else if (line_state == LINE_STATE_CENTERED) {
+        if (fabsf(ekf->x[EKF_EY]) > LINE_EKF_CENTER_GATE_MM) {
+            return false;
+        }
+        variance = LINE_EKF_R_CENTER_MM2;
+    } else {
+        return false;
+    }
+
+    const bool accepted = line_ekf_scalar_update(
+        ekf, H, measurement, ekf->x[EKF_EY], variance
+    );
+
+    if (!accepted) {
+        ekf->rejected_line_updates++;
+    }
+
+    return accepted;
+}
+
+/* Future map hook: a loaded route can provide local path curvature and a
+ * target speed at the EKF's along-track coordinate. */
+static course_map_reference_t course_map_get_reference(float along_track_mm)
+{
+    course_map_reference_t reference = {0};
+    (void)along_track_mm;
+    reference.valid = false; /* No course file is loaded in this version. */
+    reference.curvature_per_m = 0.0f;
+    reference.target_speed_deg_s = 0.0f;
+    return reference;
+}
+
+static bool line_ekf_update_map_curvature(
+    line_ekf_t *ekf,
+    float curvature_per_m)
+{
+    const float H[EKF_STATE_DIM] = {
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f
+    };
+    const float variance =
+        EKF_MAP_CURVATURE_STD_PER_M * EKF_MAP_CURVATURE_STD_PER_M;
+
+    return line_ekf_scalar_update(
+        ekf, H, curvature_per_m, ekf->x[EKF_CURVATURE], variance
+    );
 }
 
 /* Classify the actual wheel motion estimated from encoder odometry.
@@ -1150,6 +1491,11 @@ void Main(intptr_t exinf)
     float last_steering = 0.0f;
 
     odometry_t odometry = {0};
+    line_ekf_t line_ekf = {0};
+    line_ekf_reset(
+        &line_ekf,
+        imu_fusion_enabled ? gyro_bias[2] : 0.0f
+    );
 
     uint32_t last_tick_hrt = 0;
     bool have_last_tick = false;
@@ -1236,6 +1582,10 @@ void Main(intptr_t exinf)
                         last_steering = 0.0f;
                         pid_initialized = false;
                         reset_odometry(&odometry);
+                        line_ekf_reset(
+                            &line_ekf,
+                            imu_fusion_enabled ? gyro_bias[2] : 0.0f
+                        );
 
                         syslog(LOG_NOTICE,
                                "PID V2: started by force sensor C");
@@ -1258,40 +1608,71 @@ void Main(intptr_t exinf)
         }
 
         /* Read the latest cached IMU sample. The standard SPIKE-RT API
-         * returns the most recently acquired driver data; it does not start
-         * a new I2C transaction from this control task. Read it while idle
-         * too, so stationary gyro behavior can be inspected before starting. */
+         * returns driver data; it does not start an application-side I2C
+         * transaction from this control task. Keep raw gyro Z for the EKF,
+         * because gyro bias is an estimated EKF state. */
         float acceleration[3] = {0.0f, 0.0f, 0.0f};
         float angular_velocity[3] = {0.0f, 0.0f, 0.0f};
-        float gyro_z_corrected = 0.0f;
+        float gyro_z_raw_dps = 0.0f;
 
         if (imu_available) {
             hub_imu_get_acceleration(acceleration);
             hub_imu_get_angular_velocity(angular_velocity);
-
-            for (unsigned int axis = 0; axis < 3; axis++) {
-                angular_velocity[axis] -= gyro_bias[axis];
-            }
-
-            gyro_z_corrected = angular_velocity[2];
+            gyro_z_raw_dps = angular_velocity[2];
         }
 
-        /* Update wheel odometry and fuse encoder yaw with the bias-corrected
-         * IMU Z gyro. If IMU initialization or its stationary quality check
-         * failed, encoder-only odometry remains available. */
-        update_odometry(
-            &odometry,
-            motor_left,
-            motor_right,
-            dt,
-            gyro_z_corrected,
-            imu_available,
-            imu_fusion_enabled
+        /* Wheel encoder odometry is maintained independently as a reference. */
+        update_odometry(&odometry, motor_left, motor_right, dt);
+
+        /* EKF prediction uses encoder forward speed and the previous yaw /
+         * curvature state. The current map hook returns invalid until a
+         * course file is added, so the EKF estimates local curvature itself. */
+        line_ekf_predict(&line_ekf, odometry.linear_speed_mm_s, dt);
+
+        const course_map_reference_t map_reference =
+            course_map_get_reference(line_ekf.x[EKF_S]);
+
+        if (map_reference.valid) {
+            line_ekf_update_map_curvature(
+                &line_ekf, map_reference.curvature_per_m);
+        }
+
+        /* Encoder yaw is always available. When it disagrees strongly with
+         * the gyro, its measurement variance is increased rather than using
+         * a fixed 85/15 blend. */
+        const float gyro_corrected_for_compare =
+            gyro_z_raw_dps -
+            line_ekf.x[EKF_GYRO_BIAS] * ODOM_RAD_TO_DEG;
+        const float yaw_disagreement_dps = imu_available
+            ? fabsf(gyro_corrected_for_compare -
+                    odometry.encoder_yaw_rate_deg_s)
+            : 0.0f;
+
+        line_ekf_update_encoder(
+            &line_ekf,
+            odometry.encoder_yaw_rate_deg_s,
+            imu_fusion_enabled ? yaw_disagreement_dps : 0.0f
         );
 
-        /* Persistent disagreement is useful evidence of wheel slip,
-         * sign/geometry mismatch, or excessive sensor delay. It is logged
-         * but does not automatically change the fusion weight. */
+        if (imu_fusion_enabled) {
+            line_ekf_update_gyro(
+                &line_ekf,
+                gyro_z_raw_dps,
+                gyro_stddev[2]
+            );
+        }
+
+        odometry.gyro_yaw_rate_deg_s = imu_available
+            ? gyro_z_raw_dps -
+              line_ekf.x[EKF_GYRO_BIAS] * ODOM_RAD_TO_DEG
+            : 0.0f;
+        odometry.yaw_rate_difference_deg_s =
+            odometry.gyro_yaw_rate_deg_s -
+            odometry.encoder_yaw_rate_deg_s;
+        odometry.yaw_rate_deg_s =
+            line_ekf.x[EKF_OMEGA] * ODOM_RAD_TO_DEG;
+
+        /* Persistent disagreement is reported for diagnosis. */
         if (imu_fusion_enabled &&
             fabsf(odometry.yaw_rate_difference_deg_s) >
                 IMU_ENCODER_DISAGREE_DPS) {
@@ -1321,14 +1702,23 @@ void Main(intptr_t exinf)
             if (imu_log_ticks >= IMU_LOG_INTERVAL_TICKS) {
                 imu_log_ticks = 0;
                 syslog(LOG_NOTICE,
-                       "IDLE IMU=%d USE=%d GZx10=%ld EZx10=%ld DIFFx10=%ld FZx10=%ld ACCZx10=%ld",
+                       "IDLE IMU=%d USE=%d GZx10=%ld EZx10=%ld DIFFx10=%ld FZx10=%ld BGx10=%ld",
                        imu_available ? 1 : 0,
                        imu_fusion_enabled ? 1 : 0,
                        (long)(odometry.gyro_yaw_rate_deg_s * 10.0f),
                        (long)(odometry.encoder_yaw_rate_deg_s * 10.0f),
                        (long)(odometry.yaw_rate_difference_deg_s * 10.0f),
                        (long)(odometry.yaw_rate_deg_s * 10.0f),
-                       (long)(acceleration[2] * 10.0f));
+                       (long)(line_ekf.x[EKF_GYRO_BIAS] *
+                              ODOM_RAD_TO_DEG * 10.0f));
+                syslog(LOG_NOTICE,
+                       "EKF IDLE S=%ld EY=%ld EPSIx1000=%ld Kx1000=%ld SIG_EY=%ld",
+                       (long)line_ekf.x[EKF_S],
+                       (long)line_ekf.x[EKF_EY],
+                       (long)(line_ekf.x[EKF_EPSI] * 1000.0f),
+                       (long)(line_ekf.x[EKF_CURVATURE] * 1000.0f),
+                       (long)sqrtf(line_ekf.P[EKF_EY][EKF_EY]));
+                (void)acceleration;
             }
             continue;
         }
@@ -1361,13 +1751,32 @@ void Main(intptr_t exinf)
             saved_calibration.white_right
         );
 
-        /* Negative error means the left sensor is darker than the right:
-         * the line is under the left sensor; slow the left wheel to steer left. */
-        float error = normalized_left - normalized_right;
+        /* Raw normalized difference is the line sensor's local lateral
+         * observation. The EKF rejects ambiguous both-dark states and uses
+         * a weaker update when both sensors see white. */
+        const float sensor_difference =
+            normalized_left - normalized_right;
         const line_state_t line_state =
-            classify_line_state(normalized_left, normalized_right, error);
+            classify_line_state(
+                normalized_left, normalized_right, sensor_difference);
 
-        /* Suppress tiny reflectance imbalance around the centered state. */
+        const bool line_observation_accepted =
+            line_ekf_update_line(
+                &line_ekf,
+                normalized_left,
+                normalized_right,
+                line_state
+            );
+
+        /* Use EKF cross-track and heading error for steering. The heading
+         * look-ahead term anticipates the direction in which the robot is
+         * pointing relative to the local line tangent. Convert mm back to
+         * the original reflectance-difference scale for the existing PID. */
+        float error =
+            (line_ekf.x[EKF_EY] +
+             LINE_EKF_HEADING_LOOKAHEAD_MM * line_ekf.x[EKF_EPSI]) /
+            LINE_EKF_MM_PER_PERCENT;
+
         if (line_state == LINE_STATE_CENTERED &&
             fabsf(error) < LINE_CENTER_DEADBAND) {
             error = 0.0f;
@@ -1391,6 +1800,23 @@ void Main(intptr_t exinf)
         const float abs_error = fabsf(error);
         int32_t base_speed = calculate_base_speed(
             abs_error, fabsf(odometry.yaw_rate_deg_s));
+
+        const float cross_track_sigma =
+            sqrtf(line_ekf.P[EKF_EY][EKF_EY]);
+        const float heading_sigma =
+            sqrtf(line_ekf.P[EKF_EPSI][EKF_EPSI]);
+
+        if ((cross_track_sigma > LINE_EKF_MAX_SIGMA_MM ||
+             heading_sigma > LINE_EKF_MAX_SIGMA_HEADING_RAD) &&
+            base_speed > BASE_SPEED_TURN) {
+            base_speed = BASE_SPEED_TURN;
+        }
+
+        if (map_reference.valid &&
+            map_reference.target_speed_deg_s > 0.0f &&
+            base_speed > (int32_t)map_reference.target_speed_deg_s) {
+            base_speed = (int32_t)map_reference.target_speed_deg_s;
+        }
 
         /* Any measured turn reduces the straight-line speed ceiling slightly.
          * A stronger line error or yaw rate can reduce it further below. */
@@ -1521,19 +1947,25 @@ void Main(intptr_t exinf)
                    (long)(steering * 10.0f));
 
             syslog(LOG_NOTICE,
-                   "FUSION IMU=%d USE=%d GZx10=%ld EZx10=%ld DIFFx10=%ld FZx10=%ld Hx10=%ld X=%ld Y=%ld D=%ld V=%ld Kx1000=%ld",
-                   imu_available ? 1 : 0,
-                   imu_fusion_enabled ? 1 : 0,
-                   (long)(odometry.gyro_yaw_rate_deg_s * 10.0f),
-                   (long)(odometry.encoder_yaw_rate_deg_s * 10.0f),
-                   (long)(odometry.yaw_rate_difference_deg_s * 10.0f),
-                   (long)(odometry.yaw_rate_deg_s * 10.0f),
+                   "ODOM ENC_Hx10=%ld X=%ld Y=%ld D=%ld V=%ld Kx1000=%ld",
                    (long)(odometry.heading_rad * ODOM_RAD_TO_DEG * 10.0f),
                    (long)odometry.x_mm,
                    (long)odometry.y_mm,
                    (long)odometry.distance_mm,
                    (long)odometry.linear_speed_mm_s,
                    (long)(odometry.curvature_per_m * 1000.0f));
+
+            syslog(LOG_NOTICE,
+                   "EKF S=%ld EY=%ld EPSIx1000=%ld WZx10=%ld BGx10=%ld Kx1000=%ld SIGY=%ld SIGTHx1000=%ld LUP=%d",
+                   (long)line_ekf.x[EKF_S],
+                   (long)line_ekf.x[EKF_EY],
+                   (long)(line_ekf.x[EKF_EPSI] * 1000.0f),
+                   (long)(line_ekf.x[EKF_OMEGA] * ODOM_RAD_TO_DEG * 10.0f),
+                   (long)(line_ekf.x[EKF_GYRO_BIAS] * ODOM_RAD_TO_DEG * 10.0f),
+                   (long)(line_ekf.x[EKF_CURVATURE] * 1000.0f),
+                   (long)sqrtf(line_ekf.P[EKF_EY][EKF_EY]),
+                   (long)(sqrtf(line_ekf.P[EKF_EPSI][EKF_EPSI]) * 1000.0f),
+                   line_observation_accepted ? 1 : 0);
 
             syslog(LOG_NOTICE,
                    "MOTOR CMD L=%ld R=%ld ACCx10=%ld,%ld,%ld GYROx10=%ld,%ld",
