@@ -334,7 +334,7 @@ static void reset_odometry(odometry_t *odometry)
  * - Wheel encoder angle increments provide forward distance and an
  *   independent estimate of heading change.
  * - Bias-corrected IMU Z gyro provides the fast body yaw-rate measurement.
- * - The initial complementary blend uses 85% gyro / 15% encoder for yaw.
+ * - Gyro and encoder yaw are separate EKF observations; no fixed blend is used.
  *
  * The wheel geometry comes from M_S6.c: 88 mm tire diameter and 144 mm
  * wheel-center spacing. Positive yaw is a left turn for both sources:
@@ -623,7 +623,8 @@ static bool line_ekf_update_gyro(
     const float predicted =
         ekf->x[EKF_OMEGA] + ekf->x[EKF_GYRO_BIAS];
     const float sigma_dps =
-        gyro_noise_std_dps > 1.0f ? gyro_noise_std_dps : 1.0f;
+        gyro_noise_std_dps > EKF_GYRO_STD_DPS
+            ? gyro_noise_std_dps : EKF_GYRO_STD_DPS;
     const float sigma_rad_s =
         sigma_dps / ODOM_RAD_TO_DEG;
 
@@ -743,7 +744,7 @@ static bool line_ekf_update_map_curvature(
     );
 }
 
-/* Classify the actual wheel motion estimated from encoder odometry.
+/* Classify the estimated body motion from the EKF yaw-rate state.
  * Positive yaw rate means a left turn; negative means a right turn. */
 static motion_state_t classify_motion(float yaw_rate_deg_s)
 {

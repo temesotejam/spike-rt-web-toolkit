@@ -149,53 +149,69 @@ The calibration pass has a maximum travel limit and timeout. The CENTER button c
 2. **Measured elapsed time:** `fch_hrt()` measures the actual interval between control iterations. The PID derivative and integral use this measured interval, with bounds for abnormal delays.
 3. **Per-sensor calibration:** the moving calibration measures white and black reflectance independently for sensors B and F. Each sensor is normalized to a common 0..100 scale (black=0, white=100), compensating for sensor-to-sensor differences.
 4. **Line-state classification:** normalized readings classify the pair as centered, left sensor over the line, right sensor over the line, both sensors dark (wide line/crossing), or transition. Both-dark holds the previous steering direction and slows down; transition also limits speed.
-5. **Wheel-encoder odometry:** encoder angle increments from motors A/E are converted to wheel travel using the M_S6 assumptions (88 mm wheel diameter, 144 mm track). The program integrates relative X/Y, heading, distance, linear speed, yaw rate, and curvature.
-6. **Odometry-assisted steering:** measured yaw rate provides a conservative damping term, and measured turning reduces the speed ceiling. Color sensors remain the primary line-position feedback.
-7. **Filtered derivative:** a first-order low-pass filter reduces derivative spikes caused by reflection noise.
-8. **Conditional integral anti-windup:** the integral term is not accumulated when it would push an already saturated steering output further into saturation.
-9. **Adaptive speed:** the base wheel speed decreases as line-position error or measured yaw rate grows. Both wheel commands are limited to the configured range.
-10. **Start/stop input:** force sensor C toggles line-tracing operation. Three consecutive 10ms samples are required for a press or release, preventing repeated toggles while the sensor is held.
+5. **Encoder odometry:** encoder angle increments from motors A/E are converted to wheel travel using the M_S6 values (88 mm wheel diameter, 144 mm track). Encoder-only X/Y, heading, distance, speed, yaw rate, and curvature are retained as an independent diagnostic reference.
+6. **Six-state line-relative EKF:** the state is `[s, e_y, e_psi, omega, b_g, kappa]`: along-track distance, cross-track error, heading error, yaw rate, gyro bias, and local path curvature.
+7. **Three sensor observation sources:** raw IMU gyro Z observes `omega + b_g`; differential encoder speed observes `omega`; calibrated B/F reflectance difference provides a gated lateral line observation of `e_y`.
+8. **Adaptive observation confidence:** gyro noise is initialized from stationary samples; encoder observation variance increases when gyro/encoder yaw disagree; line observations use different variances for edge, transition, centered, and both-dark states. Both-dark is rejected as ambiguous.
+9. **EKF-based steering:** the PID input uses estimated cross-track and heading error. EKF yaw rate provides steering damping and speed adaptation. High estimated uncertainty reduces speed rather than automatically stopping the robot.
+10. **Future course-map interface:** the EKF tracks along-route distance and local curvature. A currently inactive map hook can later provide route curvature and target speed without changing the EKF state definition.
+11. **Filtered derivative and anti-windup:** a first-order low-pass filter reduces derivative spikes, and conditional integration prevents windup during output saturation.
+12. **Start/stop input:** force sensor C toggles line-tracing operation. Three consecutive 10ms samples are required for a press or release, preventing repeated toggles while the sensor is held.
 
-Odometry is relative wheel odometry, not an absolute measurement of the line position. Wheel slip, tire-diameter differences, and an inaccurate track-width value cause drift. Since the line is normally between the two sensors, both sensors being white can mean either a centered line or a line outside the sensor pair; this sensor geometry cannot reliably distinguish those cases by itself. Odometry can predict short-term motion, but it cannot replace a line observation.
+The EKF currently estimates position in a **local line-relative frame**, not global course X/Y coordinates. The along-track coordinate starts at zero for each run and is primarily propagated by wheel speed; cross-track error is corrected by the two color sensors. The line measurement conversion uses the provisional parameter `LINE_EKF_MM_PER_PERCENT=0.10` mm per normalized-reflectance percentage point. This is a tunable approximation because the actual B/F sensor spacing and course line width have not yet been measured. Both-white observations are weak and gated; both-dark observations are rejected. A later course-map module can transform local `(s, e_y)` into global map coordinates and add landmark/map observations.
 
-### Built-in IMU and encoder fusion
+### Six-state EKF: IMU + encoder + line observations
 
-The program uses the standard `spike/hub/imu.h` API; no IMU or motor driver changes are made. It retries `hub_imu_init()` while the driver returns `PBIO_ERROR_AGAIN`, then samples the gyro for 100 intervals of 10 ms while the robot is stationary. The mean of each gyro axis is stored as its zero-rate bias, and the standard deviation is measured as a basic stationarity/noise check.
+The fixed 85/15 gyro/encoder blend has been replaced by a six-state Extended Kalman Filter. It uses only the standard SPIKE-RT v0.2.0 APIs; no kernel or device-driver changes are made.
 
-Fusion is enabled only when IMU initialization succeeds, Z-axis gyro standard deviation is at most 3 deg/s, and the absolute Z-axis bias is at most 8 deg/s. If these checks fail, IMU data is still logged but encoder-only yaw is used.
+The state vector is:
 
-The SPIKE-RT IMU driver documents a right-handed coordinate system: +X forward, +Y left, and +Z upward. Positive Z angular velocity follows the right-hand rule and corresponds to a left turn when the Hub's documented axes align with the M_S6 robot frame. Verify the sign on the actual robot with a gentle hand rotation before relying on the fused result.
+`x = [s, e_y, e_psi, omega, b_g, kappa]^T`
 
-#### Fusion method
+| State | Meaning | Unit |
+| --- | --- | --- |
+| `s` | Distance along the current local line/path frame | mm |
+| `e_y` | Cross-track offset from the local line | mm |
+| `e_psi` | Robot heading error relative to the local line tangent | rad |
+| `omega` | Body yaw rate | rad/s |
+| `b_g` | Z-gyro bias | rad/s |
+| `kappa` | Local path curvature | 1/m |
 
-The differential-drive encoder yaw rate is calculated from the measured left/right motor speeds and the M_S6 wheel geometry (88 mm wheel diameter, 144 mm track). The gyro yaw rate is corrected by the stationary Z-axis bias.
+#### Prediction
 
-The initial blend is:
+The average measured wheel speed provides forward velocity. The current yaw-rate and curvature estimates propagate the local path-relative state:
 
-`fused yaw rate = 0.85 × gyro Z + 0.15 × encoder yaw rate`
+- `s += v * cos(e_psi) * dt`
+- `e_y += v * sin(e_psi) * dt`
+- `e_psi += (omega - v * kappa) * dt`
 
-The same 85/15 weighting is applied to gyro-integrated and encoder-derived heading increments. Fused yaw rate is low-pass filtered with a 50 ms time constant, then used for motion-state classification, adaptive speed, steering damping, and the odometry heading/X/Y integration. Forward distance remains encoder-based.
+The covariance is propagated with the nonlinear model Jacobian and process-noise terms. Curvature is a slowly varying state, so the filter can follow straight and curved local line sections without hardcoding a specific annual course.
 
-The 85/15 blend and filter constant are initial engineering values, not tuned values. They must be checked against actual gyro/encoder logs on straight runs and gentle turns. Persistent gyro/encoder disagreement above 35 deg/s for 5 control ticks (nominally 50 ms) generates a warning; it does not automatically change the fusion weights.
+#### Sequential observation updates
 
-#### 5 Hz diagnostics
+1. **IMU gyro Z:** raw gyro Z is modeled as `z_g = omega + b_g + noise`. The startup stationary bias estimate initializes `b_g`; the EKF can then refine it while moving.
+2. **Wheel encoders A/E:** measured left/right motor speeds produce an independent differential-drive yaw-rate observation. Its variance is increased when the gyro and encoder disagree, reducing the influence of a possible wheel-slip measurement.
+3. **Color sensors B/F:** the calibrated normalized-reflectance difference provides a provisional lateral observation of `e_y`. Edge observations receive higher confidence, transition observations lower confidence, centered both-white observations are weak and gated, and both-dark observations are rejected as ambiguous.
 
-While line tracing is selected but has not yet been started with force sensor C, the program logs an `IDLE` record every 20 control ticks. The motors are not commanded in this state. This makes it possible to inspect stationary gyro noise and gently rotate the robot by hand to verify the gyro Z sign before beginning a run.
+The scalar observation updates use an innovation gate and Joseph-form covariance update. The EKF covariance is retained and its standard deviations are logged; it is also used to reduce the commanded speed when position/heading uncertainty becomes large.
 
+#### Line observation approximation
 
+The current line observation is:
 
-Every 20 control ticks (nominally 5 Hz), syslog records:
+`z_line = (normalized_left - normalized_right) * LINE_EKF_MM_PER_PERCENT`
 
-- line state and motion state
-- raw and normalized B/F reflectance, line error, steering output
-- bias-corrected gyro Z, encoder yaw rate, their difference, and fused yaw rate
-- fused heading, relative X/Y, distance, linear speed, and curvature
-- left/right motor commands
-- acceleration X/Y/Z and gyro X/Y (the API returns acceleration in mm/s² and angular velocity in deg/s; logged values are multiplied by 10)
+The initial `LINE_EKF_MM_PER_PERCENT=0.10` is an **engineering starting value**, not a measured property of the robot. It must be tuned using the actual B/F sensor spacing, sensor height, and line width. The current moving white-black-white calibration estimates each sensor's reflectance range; it does not yet calibrate the lateral millimeter-per-reflectance relationship.
 
-The IMU is read through the standard API in the control task. These calls return the most recently acquired driver data; they do not initiate a new I2C transaction from the application control loop.
+#### Course-map integration (future hook)
 
-**Limitations:** this is relative wheel/gyro odometry, not absolute localization. Wheel slip, unequal effective tire diameters, inaccurate track width, gyro bias drift, and sensor-data age can all cause drift or disagreement. The accelerometer is currently diagnostic-only; it is not double-integrated for position and does not directly change steering. Both color sensors being white still cannot distinguish a centered line between the sensors from a line that has moved completely outside their detection span.
+No ETロボコン2023 route is hardcoded. The current `course_map_get_reference(s)` hook returns `valid=false`. Once a course file is loaded, it can provide local path curvature and a target speed at the EKF along-track coordinate. A map matcher can later add landmark/segment observations to convert local `(s, e_y, e_psi)` into global course coordinates. This keeps the estimator independent of which annual course segment is selected.
+
+#### Diagnostics
+
+At nominal 5 Hz, syslog records line/motion state, raw and normalized reflectance, accepted/rejected line observation status, encoder-only odometry, EKF state, EKF uncertainty, gyro bias estimate, and motor commands. While waiting for the force-sensor start command, idle logs remain available for stationary gyro and hand-rotation checks.
+
+**Limitations:** the EKF is currently local line-relative localization, not global map localization. Along-track position still accumulates encoder error. The lateral line observation is an approximate scalar model until sensor spacing and line width are measured. The curvature state is locally estimated; the route map is not loaded yet. Wheel slip, sensor timing, gyro bias drift, and the actual line/sensor geometry must be checked using real logs before treating the tuning values as final.
 
 ### Initial tuning values
 
