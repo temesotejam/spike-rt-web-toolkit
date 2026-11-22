@@ -13,6 +13,8 @@
  * モード選択:
  *   Hub左・右ボタン -> ライントレース／校正／データ出力を選択
  *   Hub中央ボタン   -> 決定
+ *   フォースセンサーC短押し -> 走行開始／終了
+ *   フォースセンサーC長押し（2.5秒） -> プログラム終了
  *
  * 走行データ:
  *   走行中のセンサー値・オドメトリ・EKF状態・モーター指令をRAMに記録。
@@ -40,6 +42,7 @@
  *   - 将来、コースマップから曲率と目標速度を取得できる接続口を用意。
  *   - 生の観測値、3軸IMU、EKFの状態と共分散を5Hzで記録。
  *   - 直前の走行データと校正データをUSBシリアルへCSV出力。
+ *   - フォースセンサーCの2.5秒長押しでモーターを停止してプログラムを終了。
  *   - IMU初期化または静止校正の品質が不十分な場合はエンコーダのみで動作。
  */
 
@@ -105,8 +108,9 @@
 #define CAL_TIMEOUT_US          12000000U
 #define CAL_STALL_IGNORE_US     500000U
 
-/* フォースセンサーのチャタリング対策：制御3周期で約30ms */
-#define BUTTON_DEBOUNCE_SAMPLES 3U
+/* フォースセンサーの短押し判定とプログラム終了判定 */
+#define FORCE_PRESS_DEBOUNCE_US 30000U
+#define FORCE_LONG_PRESS_US     2500000U
 
 /* PIDゲインは演習プログラムの初期値を引き継ぐ */
 #define KP                      1.0f
@@ -182,13 +186,26 @@
 typedef enum {
     MODE_LINE_TRACE = 0,
     MODE_CALIBRATION = 1,
-    MODE_EXPORT_DATA = 2
+    MODE_EXPORT_DATA = 2,
+    MODE_EXIT = 3
 } app_mode_t;
+
+typedef enum {
+    FORCE_PRESS_NONE = 0,
+    FORCE_PRESS_SHORT,
+    FORCE_PRESS_LONG
+} force_press_event_t;
+
+typedef struct {
+    bool active;
+    uint32_t start_hrt;
+} force_press_state_t;
 
 typedef enum {
     RUN_END_NONE = 0,
     RUN_END_RUNNING,
     RUN_END_FORCE_SENSOR,
+    RUN_END_PROGRAM_EXIT,
     RUN_END_COLOR_SENSOR_ERROR,
     RUN_END_MOTOR_ERROR
 } run_end_reason_t;
@@ -203,7 +220,8 @@ typedef enum {
 typedef enum {
     CAL_RESULT_OK = 0,
     CAL_RESULT_FAILED,
-    CAL_RESULT_CANCELLED
+    CAL_RESULT_CANCELLED,
+    CAL_RESULT_EXIT
 } calibration_result_t;
 
 typedef struct {
@@ -446,6 +464,7 @@ static const char *run_end_reason_name(run_end_reason_t reason)
     switch (reason) {
     case RUN_END_RUNNING:            return "RUNNING";
     case RUN_END_FORCE_SENSOR:       return "FORCE_SENSOR";
+    case RUN_END_PROGRAM_EXIT:       return "PROGRAM_EXIT";
     case RUN_END_COLOR_SENSOR_ERROR: return "COLOR_SENSOR_ERROR";
     case RUN_END_MOTOR_ERROR:        return "MOTOR_ERROR";
     case RUN_END_NONE:
@@ -1143,6 +1162,46 @@ static bool read_hub_buttons(uint32_t *pressed_bits)
     return true;
 }
 
+/* フォースセンサーCの押下時間から短押し・長押しを判定する。
+ * 短押しは解放時に通知し、2.5秒以上押し続けた場合は長押しを通知する。 */
+static force_press_event_t update_force_press(
+    force_press_state_t *state,
+    bool touched,
+    uint32_t now_hrt)
+{
+    if (touched) {
+        if (!state->active) {
+            state->active = true;
+            state->start_hrt = now_hrt;
+            return FORCE_PRESS_NONE;
+        }
+
+        if ((uint32_t)(now_hrt - state->start_hrt) >=
+            FORCE_LONG_PRESS_US) {
+            state->active = false;
+            return FORCE_PRESS_LONG;
+        }
+
+        return FORCE_PRESS_NONE;
+    }
+
+    if (state->active) {
+        const uint32_t duration_us =
+            (uint32_t)(now_hrt - state->start_hrt);
+        state->active = false;
+
+        if (duration_us >= FORCE_LONG_PRESS_US) {
+            return FORCE_PRESS_LONG;
+        }
+        if (duration_us >= FORCE_PRESS_DEBOUNCE_US) {
+            return FORCE_PRESS_SHORT;
+        }
+    }
+
+    return FORCE_PRESS_NONE;
+}
+
+
 static void wait_hub_buttons_released(void)
 {
     const uint32_t mask =
@@ -1188,10 +1247,11 @@ static const char *selected_mode_name(app_mode_t selected)
 
 /* 左右ボタンで3つのモードを選び、中央ボタンで決定する。
  * L=ライントレース、C=校正、D=走行・校正データのUSB出力。 */
-static app_mode_t select_mode(void)
+static app_mode_t select_mode(pup_device_t *start_stop_sensor)
 {
     app_mode_t selected = MODE_LINE_TRACE;
     uint32_t previous = 0;
+    force_press_state_t force_press = {0};
 
     show_selected_mode(selected);
     syslog(LOG_NOTICE,
@@ -1205,6 +1265,17 @@ static app_mode_t select_mode(void)
         if (!read_hub_buttons(&current)) {
             dly_tsk(MENU_POLL_US);
             continue;
+        }
+
+        const force_press_event_t force_event = update_force_press(
+            &force_press,
+            pup_force_sensor_touched(start_stop_sensor),
+            (uint32_t)fch_hrt()
+        );
+        if (force_event == FORCE_PRESS_LONG) {
+            syslog(LOG_NOTICE,
+                   "PID V2: program exit by 2.5-second force-sensor hold");
+            return MODE_EXIT;
         }
 
         const bool left_rise =
@@ -1444,8 +1515,10 @@ static calibration_result_t calibrate_across_line(
     pup_motor_t *motor_right,
     pup_device_t *sensor_left,
     pup_device_t *sensor_right,
+    pup_device_t *start_stop_sensor,
     line_calibration_t *candidate)
 {
+    force_press_state_t force_press = {0};
     float white_left_sum = 0.0f;
     float white_right_sum = 0.0f;
 
@@ -1466,6 +1539,15 @@ static calibration_result_t calibrate_across_line(
         if (center_button_pressed()) {
             syslog(LOG_NOTICE, "PID V2 CAL: cancelled before movement");
             return CAL_RESULT_CANCELLED;
+        }
+
+        if (update_force_press(
+                &force_press,
+                pup_force_sensor_touched(start_stop_sensor),
+                (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
+            syslog(LOG_NOTICE,
+                   "PID V2 CAL: program exit by force-sensor long press");
+            return CAL_RESULT_EXIT;
         }
 
         int32_t left = pup_color_sensor_reflection(sensor_left);
@@ -1520,6 +1602,17 @@ static calibration_result_t calibrate_across_line(
             pup_motor_brake(motor_right);
             syslog(LOG_NOTICE, "PID V2 CAL: cancelled by center button");
             return CAL_RESULT_CANCELLED;
+        }
+
+        if (update_force_press(
+                &force_press,
+                pup_force_sensor_touched(start_stop_sensor),
+                (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
+            pup_motor_brake(motor_left);
+            pup_motor_brake(motor_right);
+            syslog(LOG_NOTICE,
+                   "PID V2 CAL: program exit by force-sensor long press");
+            return CAL_RESULT_EXIT;
         }
 
         int32_t reflection_left =
@@ -1765,7 +1858,15 @@ void Main(intptr_t exinf)
     /* 校正値はモード選択画面に戻った後もRAM上に保持される。
      * 電源を入れ直した場合は、再度校正する必要がある。 */
     while (1) {
-        const app_mode_t selected = select_mode();
+        const app_mode_t selected = select_mode(start_stop_sensor);
+
+        if (selected == MODE_EXIT) {
+            pup_motor_brake(motor_left);
+            pup_motor_brake(motor_right);
+            hub_display_char('E');
+            syslog(LOG_NOTICE, "PID V2: program terminated from mode menu");
+            ext_tsk();
+        }
 
         if (selected == MODE_CALIBRATION) {
             wait_hub_buttons_released();
@@ -1784,6 +1885,7 @@ void Main(intptr_t exinf)
                     motor_right,
                     sensor_left,
                     sensor_right,
+                    start_stop_sensor,
                     &candidate
                 );
 
@@ -1791,7 +1893,14 @@ void Main(intptr_t exinf)
             pup_motor_brake(motor_left);
             pup_motor_brake(motor_right);
 
-            if (result == CAL_RESULT_OK) {
+            if (result == CAL_RESULT_EXIT) {
+                pup_motor_brake(motor_left);
+                pup_motor_brake(motor_right);
+                hub_display_char('E');
+                syslog(LOG_NOTICE,
+                       "PID V2: program terminated from calibration");
+                ext_tsk();
+            } else if (result == CAL_RESULT_OK) {
                 saved_calibration = candidate;
                 saved_calibration.valid = true;
 
@@ -1845,13 +1954,10 @@ void Main(intptr_t exinf)
 
     bool running = false;
     bool run_finished = false;
-    bool button_armed = !pup_force_sensor_touched(start_stop_sensor);
     bool pid_initialized = false;
     bool overrun_warning_sent = false;
     uint32_t run_start_hrt = 0;
-
-    unsigned int pressed_samples = 0;
-    unsigned int released_samples = 0;
+    force_press_state_t force_press = {0};
     uint32_t reported_overruns = 0;
 
     float integral = 0.0f;
@@ -1917,79 +2023,75 @@ void Main(intptr_t exinf)
                    "PID V2: control tick overrun detected");
         }
 
-        /* フォースセンサーCを押すたびに走行と停止を切り替える。
-         * 3回連続の検出を必要とし、次の押下を受け付ける前に解放を確認する。 */
-        const bool touched = pup_force_sensor_touched(start_stop_sensor);
+        /* Cの短押しは解放時に走行開始・終了へ割り当てる。
+         * 2.5秒以上の長押しは、どの状態からでもプログラム終了とする。 */
+        const force_event = update_force_press(
+            &force_press,
+            pup_force_sensor_touched(start_stop_sensor),
+            now_hrt
+        );
 
-        if (button_armed) {
-            if (touched) {
-                pressed_samples++;
-
-                if (pressed_samples >= BUTTON_DEBOUNCE_SAMPLES) {
-                    button_armed = false;
-                    pressed_samples = 0;
-                    released_samples = 0;
-
-                    if (running) {
-                        running = false;
-                        run_finished = true;
-                        latest_run_end_reason = RUN_END_FORCE_SENSOR;
-                        latest_run_end_hrt = now_hrt;
-                        pup_motor_brake(motor_left);
-                        pup_motor_brake(motor_right);
-
-                        integral = 0.0f;
-                        last_error = 0.0f;
-                        derivative_filtered = 0.0f;
-                        last_steering = 0.0f;
-                        pid_initialized = false;
-
-                        syslog(LOG_NOTICE,
-                               "PID V2: stopped by force sensor C; "
-                               "ODO D=%ld X=%ld Y=%ld H=%ld",
-                               (long)odometry.distance_mm,
-                               (long)odometry.x_mm,
-                               (long)odometry.y_mm,
-                               (long)(odometry.heading_rad * ODOM_RAD_TO_DEG));
-                    } else {
-                        running = true;
-                        run_finished = false;
-                        clear_latest_run_log();
-                        latest_run_valid = true;
-                        latest_run_start_hrt = now_hrt;
-                        latest_run_end_hrt = 0;
-                        latest_run_end_reason = RUN_END_RUNNING;
-                        run_start_hrt = now_hrt;
-                        imu_log_ticks = 0;
-
-                        integral = 0.0f;
-                        last_error = 0.0f;
-                        derivative_filtered = 0.0f;
-                        last_steering = 0.0f;
-                        pid_initialized = false;
-                        reset_odometry(&odometry);
-                        line_ekf_reset(
-                            &line_ekf,
-                            imu_fusion_enabled ? gyro_bias[2] : 0.0f
-                        );
-
-                        syslog(LOG_NOTICE,
-                               "PID V2: started by force sensor C");
-                    }
-                }
-            } else {
-                pressed_samples = 0;
+        if (force_event == FORCE_PRESS_LONG) {
+            if (running) {
+                latest_run_end_reason = RUN_END_PROGRAM_EXIT;
+                latest_run_end_hrt = now_hrt;
             }
-        } else {
-            if (!touched) {
-                released_samples++;
 
-                if (released_samples >= BUTTON_DEBOUNCE_SAMPLES) {
-                    button_armed = true;
-                    released_samples = 0;
-                }
+            pup_motor_brake(motor_left);
+            pup_motor_brake(motor_right);
+            stop_control_clock();
+            hub_display_char('E');
+            syslog(LOG_NOTICE,
+                   "PID V2: program terminated by 2.5-second force-sensor hold");
+            ext_tsk();
+        }
+
+        if (force_event == FORCE_PRESS_SHORT) {
+            if (running) {
+                running = false;
+                run_finished = true;
+                latest_run_end_reason = RUN_END_FORCE_SENSOR;
+                latest_run_end_hrt = now_hrt;
+                pup_motor_brake(motor_left);
+                pup_motor_brake(motor_right);
+
+                integral = 0.0f;
+                last_error = 0.0f;
+                derivative_filtered = 0.0f;
+                last_steering = 0.0f;
+                pid_initialized = false;
+
+                syslog(LOG_NOTICE,
+                       "PID V2: stopped by short press on force sensor C; "
+                       "ODO D=%ld X=%ld Y=%ld H=%ld",
+                       (long)odometry.distance_mm,
+                       (long)odometry.x_mm,
+                       (long)odometry.y_mm,
+                       (long)(odometry.heading_rad * ODOM_RAD_TO_DEG));
             } else {
-                released_samples = 0;
+                running = true;
+                run_finished = false;
+                clear_latest_run_log();
+                latest_run_valid = true;
+                latest_run_start_hrt = now_hrt;
+                latest_run_end_hrt = 0;
+                latest_run_end_reason = RUN_END_RUNNING;
+                run_start_hrt = now_hrt;
+                imu_log_ticks = 0;
+
+                integral = 0.0f;
+                last_error = 0.0f;
+                derivative_filtered = 0.0f;
+                last_steering = 0.0f;
+                pid_initialized = false;
+                reset_odometry(&odometry);
+                line_ekf_reset(
+                    &line_ekf,
+                    imu_fusion_enabled ? gyro_bias[2] : 0.0f
+                );
+
+                syslog(LOG_NOTICE,
+                       "PID V2: started by short press on force sensor C");
             }
         }
 
