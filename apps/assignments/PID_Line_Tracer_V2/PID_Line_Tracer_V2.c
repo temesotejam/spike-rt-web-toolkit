@@ -38,7 +38,8 @@
  *   - 走行距離、横偏差、方位誤差、旋回角速度、ジャイロバイアス、
  *     局所的な経路曲率を推定。
  *   - 将来、コースマップから曲率と目標速度を取得できる接続口を用意。
- *   - 生の観測値、EKFの状態と共分散を5Hzで記録。
+ *   - 生の観測値、3軸IMU、EKFの状態と共分散を5Hzで記録。
+ *   - 直前の走行データと校正データをUSBシリアルへCSV出力。
  *   - IMU初期化または静止校正の品質が不十分な場合はエンコーダのみで動作。
  */
 
@@ -295,6 +296,8 @@ typedef struct {
     int16_t curvature_x1000;
     uint16_t sigma_ey_mm;
     uint16_t sigma_heading_x1000;
+    int16_t acceleration_x10[3];
+    int16_t angular_velocity_x10[3];
     uint8_t line_state;
     uint8_t motion_state;
     uint8_t line_update_accepted;
@@ -372,6 +375,8 @@ static void append_run_log(
     int32_t motor_right,
     const odometry_t *odometry,
     const line_ekf_t *ekf,
+    const float acceleration[3],
+    const float angular_velocity[3],
     line_state_t line_state,
     motion_state_t motion_state,
     bool line_update_accepted)
@@ -412,6 +417,12 @@ static void append_run_log(
         log_u16(sqrtf(ekf->P[EKF_EY][EKF_EY]));
     record->sigma_heading_x1000 =
         log_u16(sqrtf(ekf->P[EKF_EPSI][EKF_EPSI]) * 1000.0f);
+    for (unsigned int axis = 0; axis < 3; axis++) {
+        record->acceleration_x10[axis] =
+            log_i16(acceleration[axis] * 10.0f);
+        record->angular_velocity_x10[axis] =
+            log_i16(angular_velocity[axis] * 10.0f);
+    }
     record->line_state = (uint8_t)line_state;
     record->motion_state = (uint8_t)motion_state;
     record->line_update_accepted = line_update_accepted ? 1U : 0U;
@@ -501,7 +512,9 @@ static void export_latest_data(
            "motor_left,motor_right,odom_x_mm,odom_y_mm,odom_distance_mm,"
            "odom_heading_x10,encoder_yaw_x10,gyro_yaw_x10,yaw_diff_x10,"
            "ekf_s_mm,ekf_ey_mm,ekf_heading_x1000,ekf_yaw_x10,"
-           "gyro_bias_x10,curvature_x1000,sigma_ey_mm,sigma_heading_x1000\r\n");
+           "gyro_bias_x10,curvature_x1000,sigma_ey_mm,sigma_heading_x1000,"
+           "accel_x_x10,accel_y_x10,accel_z_x10,"
+           "gyro_x_x10,gyro_y_x10,gyro_z_raw_x10\r\n");
 
     if (latest_run_valid) {
         const uint32_t oldest =
@@ -512,7 +525,8 @@ static void export_latest_data(
             const run_log_record_t *record = &run_log[index];
 
             printf("%lu,%d,%d,%d,%d,%u,%u,%u,%ld,%d,%d,%d,"
-                   "%ld,%ld,%ld,%d,%d,%d,%d,%ld,%ld,%d,%d,%d,%d,%u,%u\r\n",
+                   "%ld,%ld,%ld,%d,%d,%d,%d,%ld,%ld,%d,%d,%d,%d,%u,%u,"
+                   "%d,%d,%d,%d,%d,%d\r\n",
                    (unsigned long)record->elapsed_ms,
                    (int)record->raw_left,
                    (int)record->raw_right,
@@ -539,7 +553,13 @@ static void export_latest_data(
                    (int)record->gyro_bias_x10,
                    (int)record->curvature_x1000,
                    (unsigned int)record->sigma_ey_mm,
-                   (unsigned int)record->sigma_heading_x1000);
+                   (unsigned int)record->sigma_heading_x1000,
+                   (int)record->acceleration_x10[0],
+                   (int)record->acceleration_x10[1],
+                   (int)record->acceleration_x10[2],
+                   (int)record->angular_velocity_x10[0],
+                   (int)record->angular_velocity_x10[1],
+                   (int)record->angular_velocity_x10[2]);
         }
     }
 
@@ -1184,25 +1204,31 @@ static app_mode_t select_mode(void)
                 ? MODE_EXPORT_DATA
                 : (app_mode_t)(selected - 1);
             show_selected_mode(selected);
-            syslog(LOG_NOTICE,
-                   "PID V2: mode selected %s",
-                   selected_mode_name(selected));
+            if (selected != MODE_EXPORT_DATA) {
+                syslog(LOG_NOTICE,
+                       "PID V2: mode selected %s",
+                       selected_mode_name(selected));
+            }
         } else if (right_rise) {
             selected = (selected == MODE_EXPORT_DATA)
                 ? MODE_LINE_TRACE
                 : (app_mode_t)(selected + 1);
             show_selected_mode(selected);
-            syslog(LOG_NOTICE,
-                   "PID V2: mode selected %s",
-                   selected_mode_name(selected));
+            if (selected != MODE_EXPORT_DATA) {
+                syslog(LOG_NOTICE,
+                       "PID V2: mode selected %s",
+                       selected_mode_name(selected));
+            }
         }
 
         previous = current;
 
         if (center_rise) {
-            syslog(LOG_NOTICE,
-                   "PID V2: mode confirmed %s",
-                   selected_mode_name(selected));
+            if (selected != MODE_EXPORT_DATA) {
+                syslog(LOG_NOTICE,
+                       "PID V2: mode confirmed %s",
+                       selected_mode_name(selected));
+            }
             return selected;
         }
 
@@ -1770,8 +1796,6 @@ void Main(intptr_t exinf)
         if (selected == MODE_EXPORT_DATA) {
             wait_hub_buttons_released();
             hub_display_char('D');
-            syslog(LOG_NOTICE,
-                   "PID V2: exporting latest run and calibration data over USB");
             export_latest_data(
                 gyro_bias, gyro_stddev, imu_available, imu_fusion_enabled);
             hub_display_char('O');
@@ -2292,6 +2316,8 @@ void Main(intptr_t exinf)
                 right_speed,
                 &odometry,
                 &line_ekf,
+                acceleration,
+                angular_velocity,
                 line_state,
                 motion_state,
                 line_observation_accepted
