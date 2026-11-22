@@ -2137,7 +2137,7 @@ void Main(intptr_t exinf)
 
         /* Cの短押しは解放時に走行開始・終了へ割り当てる。
          * 2.5秒以上の長押しは、どの状態からでもプログラム終了とする。 */
-        const force_event = update_force_press(
+        const force_press_event_t force_event = update_force_press(
             &force_press,
             pup_force_sensor_touched(start_stop_sensor),
             now_hrt
