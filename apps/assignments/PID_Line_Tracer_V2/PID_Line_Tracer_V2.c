@@ -330,6 +330,11 @@ static uint32_t run_log_write_index = 0;
 static uint32_t run_log_total_samples = 0;
 static uint32_t run_log_overwritten = 0;
 static bool latest_run_valid = false;
+
+static force_press_event_t update_force_press(
+    force_press_state_t *state,
+    bool touched,
+    uint32_t now_hrt);
 static uint32_t latest_run_start_hrt = 0;
 static uint32_t latest_run_end_hrt = 0;
 static run_end_reason_t latest_run_end_reason = RUN_END_NONE;
