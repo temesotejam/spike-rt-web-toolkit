@@ -464,6 +464,8 @@ static void export_latest_data(
     dly_tsk(300000U);
 
     printf("\r\n# PID_LINE_TRACER_V2_EXPORT,1\r\n");
+    fflush(stdout);
+    dly_tsk(20000U);
     printf("# CALIBRATION,valid=%d,white_left_x10=%ld,black_left_x10=%ld,"
            "white_right_x10=%ld,black_right_x10=%ld\r\n",
            saved_calibration.valid ? 1 : 0,
@@ -471,6 +473,8 @@ static void export_latest_data(
            (long)(saved_calibration.black_left * 10.0f),
            (long)(saved_calibration.white_right * 10.0f),
            (long)(saved_calibration.black_right * 10.0f));
+    fflush(stdout);
+    dly_tsk(20000U);
 
     printf("# IMU,available=%d,fusion=%d,bias_x10=%ld,%ld,%ld,"
            "stddev_x10=%ld,%ld,%ld\r\n",
@@ -482,6 +486,8 @@ static void export_latest_data(
            (long)(gyro_stddev[0] * 10.0f),
            (long)(gyro_stddev[1] * 10.0f),
            (long)(gyro_stddev[2] * 10.0f));
+    fflush(stdout);
+    dly_tsk(20000U);
 
     printf("# SETTINGS,wheel_diameter_mm=%d,wheel_track_mm=%d,"
            "kp_x1000=%ld,ki_x1000=%ld,kd_x1000=%ld,"
@@ -492,6 +498,8 @@ static void export_latest_data(
            (long)(KI * 1000.0f),
            (long)(KD * 1000.0f),
            (long)(LINE_EKF_MM_PER_PERCENT * 1000.0f));
+    fflush(stdout);
+    dly_tsk(20000U);
 
     printf("# RUN,valid=%d,total_samples=%lu,stored_samples=%lu,"
            "overwritten_samples=%lu,duration_ms=%lu,end_reason=%s\r\n",
@@ -502,11 +510,17 @@ static void export_latest_data(
            (unsigned long)(latest_run_valid
                ? (latest_run_end_hrt - latest_run_start_hrt) / 1000U : 0U),
            run_end_reason_name(latest_run_end_reason));
+    fflush(stdout);
+    dly_tsk(20000U);
 
     printf("# LINE_STATE,0=CENTERED,1=LEFT_EDGE,2=RIGHT_EDGE,"
            "3=BOTH_DARK,4=TRANSITION\r\n");
     printf("# MOTION_STATE,0=STRAIGHT,1=TURNING_LEFT,2=TURNING_RIGHT\r\n");
+    fflush(stdout);
+    dly_tsk(20000U);
     printf("DATA_BEGIN\r\n");
+    fflush(stdout);
+    dly_tsk(20000U);
     printf("elapsed_ms,raw_left,raw_right,norm_left_x10,norm_right_x10,"
            "line_state,motion_state,line_update,error_x10,steering_x10,"
            "motor_left,motor_right,odom_x_mm,odom_y_mm,odom_distance_mm,"
