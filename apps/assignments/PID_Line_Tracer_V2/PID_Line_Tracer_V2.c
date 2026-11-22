@@ -1884,6 +1884,12 @@ void Main(intptr_t exinf)
             ext_tsk();
         }
 
+        /* 前回周期でセンサー異常・モーター異常を検出していた場合は、
+         * 新しい走行を開始する前に制御ループを終了する。 */
+        if (run_finished) {
+            break;
+        }
+
         const uint32_t now_hrt = (uint32_t)fch_hrt();
         uint32_t elapsed_us = CONTROL_PERIOD_US;
 
