@@ -1,43 +1,42 @@
 /*
  * PID_Line_Tracer_V2.c
  *
- * Standard SPIKE-RT v0.2.0 APIs only. No kernel or device-driver changes.
+ * SPIKE-RT v0.2.0の標準APIのみを使用します。カーネルやデバイスドライバは変更しません。
  *
- * Hardware:
- *   Left motor       A (counterclockwise)
- *   Right motor      E (clockwise)
- *   Left color       B
- *   Right color      F
- *   Start/stop force C
+ * 機体・ポート構成:
+ *   左モーター       A（反時計回り）
+ *   右モーター       E（時計回り）
+ *   左カラーセンサー B
+ *   右カラーセンサー F
+ *   開始・停止用フォースセンサー C
  *
- * Mode selection:
- *   Hub LEFT button   -> LINE TRACE
- *   Hub RIGHT button  -> CALIBRATION
- *   Hub CENTER button -> Confirm
+ * モード選択:
+ *   Hub左ボタン   -> ライントレース
+ *   Hub右ボタン   -> 校正
+ *   Hub中央ボタン -> 決定
  *
- * Calibration geometry:
- *   Place both color sensors on the white surface, with the robot facing
- *   straight toward a black line that crosses the direction of travel.
- *   The robot drives forward across the transverse line:
- *       white -> black -> white
- *   Each sensor is calibrated independently from its measured white/black
- *   reflectance. After success, the mode menu is shown again.
+ * 校正時の機体配置:
+ *   左右のカラーセンサーを白い面に置き、機体を進行方向と直角に交わる
+ *   黒いラインに向けてまっすぐ配置します。
+ *   機体を前進させ、横断ラインを次の順番で通過します。
+ *       白 -> 黒 -> 白
+ *   左右のセンサーを個別に測定し、それぞれの白・黒の反射光を校正します。
+ *   校正に成功すると、モード選択画面に戻ります。
  *
- * V2:
- *   - 10 ms cyclic notification and semaphore-based control wake-up.
- *   - Actual elapsed-time measurement with fch_hrt().
- *   - Moving white/black/white calibration across the line.
- *   - Per-sensor reflectance normalization.
- *   - Filtered derivative and conditional integral anti-windup.
- *   - Adaptive base speed and bounded wheel commands.
- *   - Built-in IMU initialization and stationary gyro-bias/noise calibration.
- *   - Six-state EKF uses IMU gyro, encoder yaw and line observations.
- *   - EKF estimates local along-track position, cross-track error, heading
- *     error, yaw rate, gyro bias and local path curvature.
- *   - A future course-map hook can provide curvature and target speed.
- *   - 5 Hz logs record raw observations, EKF state and covariance.
- *   - Encoder-only fallback if IMU initialization or stationary calibration
- *     quality is inadequate.
+ * V2の主な機能:
+ *   - 10ms周期の通知とセマフォによる制御タスクの起床。
+ *   - fch_hrt()を使った実際の経過時間の測定。
+ *   - ラインを横切る白・黒・白の移動校正。
+ *   - センサーごとの反射光正規化。
+ *   - 微分項のフィルタと積分アンチワインドアップ。
+ *   - 基準速度の適応調整とモーター指令値の制限。
+ *   - 内蔵IMUの初期化と、静止状態でのジャイロバイアス・ノイズ校正。
+ *   - IMUジャイロ、エンコーダ、ライン観測を使う6状態EKF。
+ *   - 走行距離、横偏差、方位誤差、旋回角速度、ジャイロバイアス、
+ *     局所的な経路曲率を推定。
+ *   - 将来、コースマップから曲率と目標速度を取得できる接続口を用意。
+ *   - 生の観測値、EKFの状態と共分散を5Hzで記録。
+ *   - IMU初期化または静止校正の品質が不十分な場合はエンコーダのみで動作。
  */
 
 #include <kernel.h>
@@ -57,19 +56,19 @@
 #include "spike/hub/speaker.h"
 #include "spike/hub/imu.h"
 
-/* Port assignment */
+/* ポート割り当て */
 #define LEFT_COLOR_SENSOR       PBIO_PORT_ID_B
 #define RIGHT_COLOR_SENSOR      PBIO_PORT_ID_F
 #define START_STOP_SENSOR       PBIO_PORT_ID_C
 #define LEFT_MOTOR              PBIO_PORT_ID_A
 #define RIGHT_MOTOR             PBIO_PORT_ID_E
 
-/* Control timing */
+/* 制御タイミング */
 #define CONTROL_PERIOD_US       10000U
 #define CONTROL_DT_MIN_US       1000U
 #define CONTROL_DT_MAX_US       50000U
 
-/* IMU initialization and stationary gyro-bias calibration. */
+/* IMUの初期化と、静止状態でのジャイロバイアス校正 */
 #define IMU_INIT_RETRY_COUNT    300U
 #define IMU_INIT_RETRY_US       10000U
 #define IMU_BIAS_SAMPLES        100U
@@ -78,13 +77,13 @@
 #define IMU_BIAS_MAX_ABS_DPS    8.0f
 #define IMU_DISAGREE_CONFIRM_TICKS 5U
 
-/* Keep diagnostic logging slower than the 100 Hz control loop. */
+/* 診断ログの出力頻度は、100Hzの制御ループより低くする */
 #define IMU_LOG_INTERVAL_TICKS  20U
 
-/* Hub mode-menu polling */
+/* Hubのモード選択ボタンを確認する周期 */
 #define MENU_POLL_US            20000U
 
-/* Calibration: robot crosses a transverse black line at low speed. */
+/* 校正時は、機体を低速で横断する黒いラインの上を通過させる */
 #define CAL_WHITE_SAMPLES       8U
 #define CAL_WHITE_MIN_REFLECT   20
 #define CAL_BLACK_RATIO         0.85f
@@ -100,17 +99,17 @@
 #define CAL_TIMEOUT_US          12000000U
 #define CAL_STALL_IGNORE_US     500000U
 
-/* Force-sensor debounce: 3 control ticks = nominally 30 ms. */
+/* フォースセンサーのチャタリング対策：制御3周期で約30ms */
 #define BUTTON_DEBOUNCE_SAMPLES 3U
 
-/* PID gains retained as initial exercise values. */
+/* PIDゲインは演習プログラムの初期値を引き継ぐ */
 #define KP                      1.0f
 #define KI                      0.1f
 #define KD                      0.1f
 #define I_TERM_LIMIT            20.0f
 #define DERIVATIVE_FILTER_TAU_S 0.040f
 
-/* Adaptive wheel-speed limits [deg/s]. */
+/* 左右車輪の速度を適応調整する範囲 [deg/s] */
 #define BASE_SPEED_STRAIGHT     120
 #define BASE_SPEED_TURN         80
 #define SLOWDOWN_ERROR          40.0f
@@ -118,7 +117,7 @@
 #define MAX_WHEEL_SPEED         200
 #define MAX_STEERING            100.0f
 
-/* Differential-drive odometry geometry: M_S6 wheelbase configuration. */
+/* 差動二輪オドメトリの機体寸法：M_S6の構成値 */
 #define ODOM_PI                  3.14159265f
 #define WHEEL_DIAMETER_MM        88.0f
 #define WHEEL_TRACK_MM           144.0f
@@ -128,9 +127,9 @@
 #define ODOM_YAW_DAMPING_GAIN    0.15f
 #define IMU_ENCODER_DISAGREE_DPS 35.0f
 
-/* Six-state local path-relative EKF:
- * [s, cross_track, heading_error, yaw_rate, gyro_bias, path_curvature].
- * Units: mm, mm, rad, rad/s, rad/s, 1/m.
+/* 6状態の局所経路座標系EKF:
+ * [s, 横偏差, 方位誤差, 旋回角速度, ジャイロバイアス, 経路曲率]
+ * 単位: mm, mm, rad, rad/s, rad/s, 1/m
  */
 #define EKF_STATE_DIM            6U
 #define EKF_S                    0U
@@ -141,8 +140,8 @@
 #define EKF_CURVATURE            5U
 #define EKF_INNOVATION_GATE2     16.0f
 
-/* Initial measurement models; tune LINE_EKF_MM_PER_PERCENT after measuring
- * the actual B/F sensor spacing and the course line width. */
+/* 初期観測モデル。B/Fセンサー間隔とコースのライン幅を実測した後、
+ * LINE_EKF_MM_PER_PERCENTを調整してください。 */
 #define LINE_EKF_MM_PER_PERCENT  0.10f
 #define LINE_EKF_MIN_DIFF        4.0f
 #define LINE_EKF_CENTER_GATE_MM  20.0f
@@ -153,12 +152,12 @@
 #define LINE_EKF_MAX_SIGMA_MM    20.0f
 #define LINE_EKF_MAX_SIGMA_HEADING_RAD 0.35f
 
-/* Measurement standard deviations. Startup gyro noise is also included. */
+/* 観測ノイズの標準偏差。起動時に測定したジャイロノイズも考慮する */
 #define EKF_GYRO_STD_DPS         3.0f
 #define EKF_ENCODER_STD_DPS      12.0f
 #define EKF_MAP_CURVATURE_STD_PER_M 0.10f
 
-/* Continuous-time process-noise intensities. */
+/* 連続時間モデルにおけるプロセスノイズの強度 */
 #define EKF_Q_S_MM2_PER_S        4.0f
 #define EKF_Q_EY_MM2_PER_S       9.0f
 #define EKF_Q_EPSI_RAD2_PER_S    0.0004f
@@ -166,7 +165,7 @@
 #define EKF_Q_BIAS_RAD2_PER_S    0.000001f
 #define EKF_Q_CURVATURE_PER_M2_PER_S 0.05f
 
-/* Normalized reflectance state thresholds (black=0, white=100). */
+/* 正規化反射光の状態判定しきい値（黒=0、白=100） */
 #define LINE_DARK_THRESHOLD      45.0f
 #define LINE_WHITE_THRESHOLD     70.0f
 #define LINE_CENTER_DIFF         12.0f
@@ -235,7 +234,7 @@ typedef struct {
     float encoder_yaw_rate_deg_s;
     float gyro_yaw_rate_deg_s;
     float yaw_rate_difference_deg_s;
-    float yaw_rate_deg_s; /* EKF estimate */
+    float yaw_rate_deg_s; /* EKFによる推定値 */
     float curvature_per_m;
     bool initialized;
 } odometry_t;
@@ -247,8 +246,8 @@ typedef struct {
     bool initialized;
 } line_ekf_t;
 
-/* The route map is intentionally not loaded yet. Later, a course-map module
- * can return curvature and a speed limit at the EKF's along-track position. */
+/* 現段階では経路マップを読み込みません。将来、コースマップの機能から
+ * EKFが推定した経路方向の位置に応じた曲率と速度上限を取得できるようにします。 */
 typedef struct {
     bool valid;
     float curvature_per_m;
@@ -258,7 +257,7 @@ typedef struct {
 static volatile uint32_t control_tick_overruns = 0;
 static line_calibration_t saved_calibration = {0};
 
-/* Keep a floating-point value within an inclusive range. */
+/* 浮動小数点値を指定範囲内に収める */
 static float clamp_float(float value, float lower, float upper)
 {
     if (value < lower) {
@@ -291,8 +290,8 @@ static int32_t clamp_speed(int32_t value)
     return clamp_int32(value, MIN_WHEEL_SPEED, MAX_WHEEL_SPEED);
 }
 
-/* Reduce forward speed for either large line error or high measured
- * yaw rate. The odometry term is deliberately conservative. */
+/* ライン偏差または旋回角速度が大きい場合に前進速度を下げる。
+ * オドメトリによる速度調整は過度にならないよう控えめにする。 */
 static int32_t calculate_base_speed(float abs_error, float abs_yaw_rate)
 {
     const float error_ratio =
@@ -308,7 +307,7 @@ static int32_t calculate_base_speed(float abs_error, float abs_yaw_rate)
     );
 }
 
-/* Reset the relative odometry origin at the beginning of each run. */
+/* 走行開始時に相対オドメトリの原点をリセットする */
 static void reset_odometry(odometry_t *odometry)
 {
     odometry->previous_left_count = 0;
@@ -326,23 +325,22 @@ static void reset_odometry(odometry_t *odometry)
     odometry->initialized = false;
 }
 
-/* Differential-drive odometry from the standard motor encoder API.
- * pup_motor_setup() defines each motor's positive direction as forward,
- * so both encoder increments are positive during straight forward motion. */
-/* Fuse differential-drive encoder odometry with the Hub gyro.
+/* 標準モーターエンコーダAPIを使った差動二輪オドメトリ。
+ * pup_motor_setup()で各モーターの正方向を前進方向に設定しているため、
+ * 直進時は左右のエンコーダ増分がともに正になる。 */
+/* 差動二輪のエンコーダオドメトリを計算する。
  *
- * - Wheel encoder angle increments provide forward distance and an
- *   independent estimate of heading change.
- * - Bias-corrected IMU Z gyro provides the fast body yaw-rate measurement.
- * - Gyro and encoder yaw are separate EKF observations; no fixed blend is used.
+ * - 車輪エンコーダの角度増分から前進距離と方位変化を求める。
+ * - バイアス補正済みのIMU Z軸ジャイロから機体の旋回角速度を取得する。
+ * - ジャイロとエンコーダは、固定比率で混ぜずにEKFの別々の観測として扱う。
  *
- * The wheel geometry comes from M_S6.c: 88 mm tire diameter and 144 mm
- * wheel-center spacing. Positive yaw is a left turn for both sources:
- * (right wheel travel - left wheel travel) / track width.
+ * 車輪寸法はM_S6.cの値を使用する。タイヤ直径88mm、左右車輪中心間隔144mm。
+ * 両方の情報源で、正のヨー角速度は左旋回を表す。
+ * （右車輪の移動量 - 左車輪の移動量）/ 車輪間隔
  */
-/* Encoder-only differential-drive odometry.
- * This remains an independent dead-reckoning reference for EKF diagnostics.
- * The EKF below estimates local line-relative position and fused yaw. */
+/* エンコーダのみを使った差動二輪オドメトリ。
+ * EKFの診断用として、独立したデッドレコニング結果を保持する。
+ * EKFでは、ラインに対する局所位置と旋回状態を推定する。 */
 static void update_odometry(
     odometry_t *odometry,
     pup_motor_t *motor_left,
@@ -421,7 +419,7 @@ static void update_odometry(
     (void)dt;
 }
 
-/* Wrap an angle into [-pi, pi]. */
+/* 角度を-piから+piの範囲に収める */
 static float wrap_angle_rad(float angle)
 {
     while (angle > ODOM_PI) {
@@ -433,9 +431,9 @@ static float wrap_angle_rad(float angle)
     return angle;
 }
 
-/* Initialize the local path-relative EKF. The initial pose assumes the robot
- * is placed approximately on the line and aligned with its local tangent.
- * Covariance is deliberately non-zero because this is only an initial guess. */
+/* ラインに対する局所座標系のEKFを初期化する。
+ * 初期姿勢は、機体がライン付近にあり、ラインの接線方向におおむね
+ * 向いていると仮定する。初期値は推定値なので、共分散を0にはしない。 */
 static void line_ekf_reset(line_ekf_t *ekf, float initial_gyro_bias_dps)
 {
     for (unsigned int i = 0; i < EKF_STATE_DIM; i++) {
@@ -448,20 +446,20 @@ static void line_ekf_reset(line_ekf_t *ekf, float initial_gyro_bias_dps)
     ekf->x[EKF_GYRO_BIAS] =
         initial_gyro_bias_dps / ODOM_RAD_TO_DEG;
 
-    ekf->P[EKF_S][EKF_S] = 10000.0f; /* 100 mm standard deviation */
-    ekf->P[EKF_EY][EKF_EY] = 225.0f; /* 15 mm */
-    ekf->P[EKF_EPSI][EKF_EPSI] = 0.12185f; /* 20 deg */
-    ekf->P[EKF_OMEGA][EKF_OMEGA] = 0.12185f; /* 20 deg/s */
-    ekf->P[EKF_GYRO_BIAS][EKF_GYRO_BIAS] = 0.002742f; /* 3 deg/s */
-    ekf->P[EKF_CURVATURE][EKF_CURVATURE] = 0.25f; /* 0.5 1/m */
+    ekf->P[EKF_S][EKF_S] = 10000.0f; /* 標準偏差100mm */
+    ekf->P[EKF_EY][EKF_EY] = 225.0f; /* 標準偏差15mm */
+    ekf->P[EKF_EPSI][EKF_EPSI] = 0.12185f; /* 標準偏差20度 */
+    ekf->P[EKF_OMEGA][EKF_OMEGA] = 0.12185f; /* 標準偏差20度/秒 */
+    ekf->P[EKF_GYRO_BIAS][EKF_GYRO_BIAS] = 0.002742f; /* 標準偏差3度/秒 */
+    ekf->P[EKF_CURVATURE][EKF_CURVATURE] = 0.25f; /* 標準偏差0.5 1/m */
 
     ekf->rejected_line_updates = 0;
     ekf->initialized = true;
 }
 
-/* EKF prediction in a local route frame.
- * s: along-track distance; ey: cross-track offset; epsi: heading error.
- * The curvature state is estimated now; a future course map can correct it. */
+/* 局所経路座標系におけるEKFの予測処理。
+ * s: 経路に沿った距離、ey: 横方向の偏差、epsi: 機体の方位誤差。
+ * 現段階では曲率も推定し、将来はコースマップの情報で補正できるようにする。 */
 static void line_ekf_predict(
     line_ekf_t *ekf,
     float linear_speed_mm_s,
@@ -530,8 +528,8 @@ static void line_ekf_predict(
     }
 }
 
-/* Scalar EKF observation update with a Joseph-form covariance update.
- * H is the observation Jacobian, z is the measurement, h is its prediction. */
+/* スカラー観測を使ったEKFの観測更新。共分散の更新にはJoseph形式を使用する。
+ * Hは観測関数のヤコビ行列、zは実測値、hは予測した観測値。 */
 static bool line_ekf_scalar_update(
     line_ekf_t *ekf,
     const float H[EKF_STATE_DIM],
@@ -593,7 +591,7 @@ static bool line_ekf_scalar_update(
         }
     }
 
-    /* Enforce numerical symmetry and keep diagonal variances positive. */
+    /* 数値計算による非対称を補正し、対角成分の分散が正になるようにする */
     for (unsigned int i = 0; i < EKF_STATE_DIM; i++) {
         for (unsigned int j = i; j < EKF_STATE_DIM; j++) {
             const float symmetric =
@@ -609,7 +607,7 @@ static bool line_ekf_scalar_update(
     return true;
 }
 
-/* IMU observation: raw gyro Z = body yaw rate + gyro bias. */
+/* IMU観測：生のジャイロZ値 = 機体の旋回角速度 + ジャイロバイアス */
 static bool line_ekf_update_gyro(
     line_ekf_t *ekf,
     float gyro_z_raw_dps,
@@ -634,8 +632,8 @@ static bool line_ekf_update_gyro(
     );
 }
 
-/* Encoder observation: differential wheel speed is an independent yaw-rate
- * measurement. Its variance is increased when wheel/gyro disagreement grows. */
+/* エンコーダ観測：左右車輪速度の差から、独立した旋回角速度の観測値を求める。
+ * 車輪とジャイロの不一致が大きい場合は、観測分散を大きくして影響を弱める。 */
 static bool line_ekf_update_encoder(
     line_ekf_t *ekf,
     float encoder_yaw_rate_dps,
@@ -664,13 +662,14 @@ static bool line_ekf_update_encoder(
     );
 }
 
-/* Line observation from the two calibrated reflectance sensors.
- * The differential is converted to a provisional lateral offset. This is
- * intentionally a tunable pseudo-measurement until sensor spacing and line
- * width are measured and a geometric sensor model is added.
+/* 校正済みの左右反射光センサーによるライン観測。
+ * 左右の反射光差を、暫定的な横方向偏差に変換する。
+ * センサー間隔とライン幅を実測し、幾何学的な観測モデルを追加するまでは、
+ * 調整可能な疑似観測として扱う。
  *
- * Both-dark is ambiguous and is rejected. Both-white is a weak zero-offset
- * observation only while the predicted track offset remains near the pair. */
+ * 両方黒の場合は状態が曖昧なので観測を棄却する。
+ * 両方白の場合は、予測した横偏差がセンサー間に近いときだけ、
+ * 信頼度の低い「偏差ゼロ」の観測として扱う。 */
 static bool line_ekf_update_line(
     line_ekf_t *ekf,
     float normalized_left,
@@ -717,13 +716,13 @@ static bool line_ekf_update_line(
     return accepted;
 }
 
-/* Future map hook: a loaded route can provide local path curvature and a
- * target speed at the EKF's along-track coordinate. */
+/* 将来のマップ接続口。読み込んだ経路から、EKFが推定した経路方向の位置に
+ * 対応する局所曲率と目標速度を取得できるようにする。 */
 static course_map_reference_t course_map_get_reference(float along_track_mm)
 {
     course_map_reference_t reference = {0};
     (void)along_track_mm;
-    reference.valid = false; /* No course file is loaded in this version. */
+    reference.valid = false; /* このバージョンではコースファイルを読み込んでいない */
     reference.curvature_per_m = 0.0f;
     reference.target_speed_deg_s = 0.0f;
     return reference;
@@ -744,8 +743,8 @@ static bool line_ekf_update_map_curvature(
     );
 }
 
-/* Classify the estimated body motion from the EKF yaw-rate state.
- * Positive yaw rate means a left turn; negative means a right turn. */
+/* EKFの旋回角速度推定値から機体の運動状態を分類する。
+ * 正の旋回角速度は左旋回、負の旋回角速度は右旋回を表す。 */
 static motion_state_t classify_motion(float yaw_rate_deg_s)
 {
     if (yaw_rate_deg_s > ODOM_YAW_RATE_THRESHOLD) {
@@ -780,10 +779,11 @@ static const char *motion_state_name(motion_state_t state)
 }
 
 
-/* The two sensors straddle the line: centered normally means both are
- * white and balanced. A dark left/right sensor identifies which side of
- * the line has moved under the sensor. Both-dark is treated as a crossing
- * or unusually wide line, not as a reliable left/right position cue. */
+/* 左右のセンサーでラインを挟む配置を想定する。
+ * ラインが中央にある場合、通常は左右とも白で反射光がほぼ等しくなる。
+ * 左右どちらかが黒を検出した場合、ラインがそのセンサー側に寄ったと判断する。
+ * 両方黒の場合は交差点または幅の広いラインの可能性があり、
+ * 左右位置を判断する確かな情報としては扱わない。 */
 static line_state_t classify_line_state(
     float normalized_left,
     float normalized_right,
@@ -811,7 +811,7 @@ static line_state_t classify_line_state(
     return LINE_STATE_TRANSITION;
 }
 
-/* The hub API returns a bitmask of all currently pressed built-in buttons. */
+/* Hub APIから、現在押されている本体ボタンをビットマスクで取得する */
 static bool read_hub_buttons(uint32_t *pressed_bits)
 {
     hub_button_t pressed = 0;
@@ -842,9 +842,9 @@ static void wait_hub_buttons_released(void)
     }
 }
 
-/* Select one of the two operating modes. LEFT selects trace; RIGHT selects
- * calibration; CENTER confirms. Edge detection prevents a held button from
- * repeatedly changing or confirming the selection. */
+/* 2つの動作モードから選択する。
+ * 左ボタンでライントレース、右ボタンで校正を選び、中央ボタンで決定する。
+ * ボタンの押下エッジを検出し、押しっぱなしで選択や決定が繰り返されないようにする。 */
 static app_mode_t select_mode(void)
 {
     app_mode_t selected = MODE_LINE_TRACE;
@@ -897,7 +897,7 @@ static app_mode_t select_mode(void)
     }
 }
 
-/* Start the cyclic release source with an empty binary semaphore. */
+/* バイナリセマフォを空の状態にして周期通知を開始する */
 static bool start_control_clock(void)
 {
     if (ini_sem(SEM_CONTROL_TICK) != E_OK) {
@@ -908,15 +908,15 @@ static bool start_control_clock(void)
     return sta_cyc(CYC_CONTROL_TICK) == E_OK;
 }
 
-/* Stop the cyclic source before returning to the non-periodic mode menu. */
+/* 周期通知を停止してから、非周期処理のモード選択画面へ戻る */
 static void stop_control_clock(void)
 {
     stp_cyc(CYC_CONTROL_TICK);
     ini_sem(SEM_CONTROL_TICK);
 }
 
-/* Cyclic-handler context: notify only. All sensor and motor operations are
- * performed later by Main in ordinary task context. */
+/* 周期ハンドラ内では通知だけを行う。
+ * センサー取得やモーター操作は、後で通常タスクコンテキストのMainが実行する。 */
 void control_tick_handler(intptr_t exinf)
 {
     if (isig_sem(SEM_CONTROL_TICK) != E_OK) {
@@ -949,8 +949,8 @@ static bool initialize_imu(float gyro_bias[3], float gyro_stddev[3])
 {
     pbio_error_t result = PBIO_ERROR_AGAIN;
 
-    /* The IMU driver initializes asynchronously in the Pybricks task.
-     * Retry PBIO_ERROR_AGAIN from ordinary task context. */
+    /* IMUドライバの初期化はPybricksタスク内で非同期に進む。
+     * 通常タスクコンテキストからPBIO_ERROR_AGAINを再試行する。 */
     for (unsigned int i = 0; i < IMU_INIT_RETRY_COUNT; i++) {
         result = hub_imu_init();
 
@@ -969,7 +969,7 @@ static bool initialize_imu(float gyro_bias[3], float gyro_stddev[3])
         return false;
     }
 
-    /* The robot must remain stationary while estimating the gyro zero bias. */
+    /* ジャイロのゼロ点バイアスを推定している間、機体を静止させておく */
     float sum[3] = {0.0f, 0.0f, 0.0f};
     float sum_sq[3] = {0.0f, 0.0f, 0.0f};
 
@@ -1007,7 +1007,7 @@ static bool initialize_imu(float gyro_bias[3], float gyro_stddev[3])
 }
 
 
-/* Initialize one sensor's crossing detector from its white baseline. */
+/* 白色面の基準値を使って、各センサーのライン横断検出器を初期化する */
 static void init_sensor_crossing(
     sensor_crossing_t *sensor,
     float white_before)
@@ -1021,7 +1021,7 @@ static void init_sensor_crossing(
     sensor->white_after_samples = 0;
 }
 
-/* Track white -> black -> white independently for one sensor. */
+/* 各センサーについて、白 -> 黒 -> 白の変化を個別に追跡する */
 static void update_sensor_crossing(
     sensor_crossing_t *sensor,
     int32_t reflection)
@@ -1061,7 +1061,7 @@ static void update_sensor_crossing(
                 sensor->phase = CAL_DONE;
             }
         } else {
-            /* A short bright gap was noise or an incomplete crossing. */
+            /* 短い白色区間はノイズ、またはライン横断が完了していない状態とみなす */
             sensor->black_sum += value;
             sensor->black_samples++;
             sensor->white_after_sum = 0.0f;
@@ -1076,10 +1076,10 @@ static void update_sensor_crossing(
     }
 }
 
-/* Drive straight slowly while crossing a transverse black line.
- * The robot must start with BOTH sensors on the white surface.
- * A successful result is written only after both sensors complete
- * white -> black -> white and pass contrast validation. */
+/* 横断する黒いラインを通過する間、低速で直進する。
+ * 開始時は左右両方のセンサーが白い面を検出していなければならない。
+ * 左右両方が白 -> 黒 -> 白を完了し、コントラスト検査に合格した場合だけ、
+ * 校正結果を保存する。 */
 static calibration_result_t calibrate_across_line(
     pup_motor_t *motor_left,
     pup_motor_t *motor_right,
@@ -1097,7 +1097,7 @@ static calibration_result_t calibrate_across_line(
     syslog(LOG_NOTICE,
            "PID V2 CAL: keep both sensors on white; sampling baseline");
 
-    /* Take a stable white baseline before the robot begins to move. */
+    /* 機体が動き始める前に、安定した白色基準値を取得する */
     for (unsigned int i = 0; i < CAL_WHITE_SAMPLES; i++) {
         if (!wait_control_tick()) {
             syslog(LOG_ERROR, "PID V2 CAL: control tick wait failed");
@@ -1179,7 +1179,7 @@ static calibration_result_t calibrate_across_line(
         update_sensor_crossing(&left_crossing, reflection_left);
         update_sensor_crossing(&right_crossing, reflection_right);
 
-        /* Continue until BOTH sensors have independently returned to white. */
+        /* 左右両方のセンサーが、それぞれ白色面に戻るまで走行を続ける */
         if (left_crossing.phase == CAL_DONE &&
             right_crossing.phase == CAL_DONE) {
             pup_motor_brake(motor_left);
@@ -1218,7 +1218,7 @@ static calibration_result_t calibrate_across_line(
             return CAL_RESULT_FAILED;
         }
 
-        /* Encoder synchronization keeps the calibration path straight. */
+        /* エンコーダの左右同期によって、校正時の走行経路を直進に保つ */
         int32_t correction =
             (travel_left - travel_right) * CAL_SYNC_GAIN;
         correction = clamp_int32(
@@ -1290,8 +1290,8 @@ static calibration_result_t calibrate_across_line(
     return CAL_RESULT_OK;
 }
 
-/* Convert each sensor's raw reflectance to a common 0..100 scale:
- * 0 = calibrated black, 100 = calibrated white. */
+/* 各センサーの生の反射光を共通の0～100の尺度に変換する。
+ * 0 = 校正した黒、100 = 校正した白。 */
 static float normalize_reflection(
     int32_t reflection,
     float black_value,
@@ -1310,7 +1310,7 @@ static float normalize_reflection(
     );
 }
 
-/* MAIN_TASK: startup menu, moving calibration, then periodic line tracing. */
+/* MAIN_TASK：起動時のモード選択、移動校正、周期ライントレースを実行する */
 void Main(intptr_t exinf)
 {
     pup_motor_t *motor_left =
@@ -1369,9 +1369,8 @@ void Main(intptr_t exinf)
            "PID V2: initialized; A/E motors, B/F colors, C force sensor");
     dly_tsk(3000000);
 
-    /* Initialize the built-in LSM6DS3TR-C IMU and estimate its stationary
-     * gyro bias. If unavailable, line tracing remains available using
-     * encoder-only motion estimates. */
+    /* 内蔵LSM6DS3TR-C IMUを初期化し、静止状態でジャイロバイアスを推定する。
+     * IMUを利用できない場合も、エンコーダだけを使ってライントレースを続行できる。 */
     float gyro_bias[3] = {0.0f, 0.0f, 0.0f};
     float gyro_stddev[3] = {0.0f, 0.0f, 0.0f};
     const bool imu_available = initialize_imu(gyro_bias, gyro_stddev);
@@ -1404,8 +1403,8 @@ void Main(intptr_t exinf)
     hub_speaker_set_volume(100);
     hub_speaker_play_tone(695, 200);
 
-    /* Calibration remains in RAM after returning to the menu.
-     * It must be repeated after a power cycle. */
+    /* 校正値はモード選択画面に戻った後もRAM上に保持される。
+     * 電源を入れ直した場合は、再度校正する必要がある。 */
     while (1) {
         const app_mode_t selected = select_mode();
 
@@ -1543,8 +1542,8 @@ void Main(intptr_t exinf)
                    "PID V2: control tick overrun detected");
         }
 
-        /* Force sensor C toggles run/stop. Three consecutive samples are
-         * required, and a release must be observed before another press. */
+        /* フォースセンサーCを押すたびに走行と停止を切り替える。
+         * 3回連続の検出を必要とし、次の押下を受け付ける前に解放を確認する。 */
         const bool touched = pup_force_sensor_touched(start_stop_sensor);
 
         if (button_armed) {
@@ -1608,10 +1607,10 @@ void Main(intptr_t exinf)
             }
         }
 
-        /* Read the latest cached IMU sample. The standard SPIKE-RT API
-         * returns driver data; it does not start an application-side I2C
-         * transaction from this control task. Keep raw gyro Z for the EKF,
-         * because gyro bias is an estimated EKF state. */
+        /* IMUドライバが保持している最新の測定値を取得する。
+         * 標準SPIKE-RT APIはドライバのデータを返すため、この制御タスクから
+         * アプリケーション側のI2C通信を新たに開始するわけではない。
+         * ジャイロバイアスはEKFの推定状態なので、生のジャイロZ値を保持する。 */
         float acceleration[3] = {0.0f, 0.0f, 0.0f};
         float angular_velocity[3] = {0.0f, 0.0f, 0.0f};
         float gyro_z_raw_dps = 0.0f;
@@ -1622,12 +1621,12 @@ void Main(intptr_t exinf)
             gyro_z_raw_dps = angular_velocity[2];
         }
 
-        /* Wheel encoder odometry is maintained independently as a reference. */
+        /* 車輪エンコーダによるオドメトリは、比較用として独立に保持する */
         update_odometry(&odometry, motor_left, motor_right, dt);
 
-        /* EKF prediction uses encoder forward speed and the previous yaw /
-         * curvature state. The current map hook returns invalid until a
-         * course file is added, so the EKF estimates local curvature itself. */
+        /* EKFの予測にはエンコーダから求めた前進速度と、直前の旋回角速度・曲率状態を使う。
+         * コースファイルが追加されるまではマップ接続口が無効なので、
+         * EKF自身が局所的な曲率を推定する。 */
         line_ekf_predict(&line_ekf, odometry.linear_speed_mm_s, dt);
 
         const course_map_reference_t map_reference =
@@ -1638,9 +1637,9 @@ void Main(intptr_t exinf)
                 &line_ekf, map_reference.curvature_per_m);
         }
 
-        /* Encoder yaw is always available. When it disagrees strongly with
-         * the gyro, its measurement variance is increased rather than using
-         * a fixed 85/15 blend. */
+        /* エンコーダによる旋回観測は常に利用できる。
+         * ジャイロと大きく食い違う場合は、固定比率で混ぜるのではなく、
+         * エンコーダ観測の分散を大きくして影響を弱める。 */
         const float gyro_corrected_for_compare =
             gyro_z_raw_dps -
             line_ekf.x[EKF_GYRO_BIAS] * ODOM_RAD_TO_DEG;
@@ -1673,7 +1672,7 @@ void Main(intptr_t exinf)
         odometry.yaw_rate_deg_s =
             line_ekf.x[EKF_OMEGA] * ODOM_RAD_TO_DEG;
 
-        /* Persistent disagreement is reported for diagnosis. */
+        /* 不一致が継続した場合は、原因調査用の警告を出力する */
         if (imu_fusion_enabled &&
             fabsf(odometry.yaw_rate_difference_deg_s) >
                 IMU_ENCODER_DISAGREE_DPS) {
@@ -1697,8 +1696,8 @@ void Main(intptr_t exinf)
             classify_motion(odometry.yaw_rate_deg_s);
 
         if (!running) {
-            /* Idle diagnostics allow a stationary test and a hand-rotation
-             * sign check without commanding either motor. */
+            /* 待機中の診断ログを使い、モーターを動かさずに静止時の測定と
+             * 手で機体を回したときのジャイロ符号を確認できるようにする。 */
             imu_log_ticks++;
             if (imu_log_ticks >= IMU_LOG_INTERVAL_TICKS) {
                 imu_log_ticks = 0;
@@ -1752,9 +1751,8 @@ void Main(intptr_t exinf)
             saved_calibration.white_right
         );
 
-        /* Raw normalized difference is the line sensor's local lateral
-         * observation. The EKF rejects ambiguous both-dark states and uses
-         * a weaker update when both sensors see white. */
+        /* 正規化した左右反射光の差を、ラインの横方向位置に関する観測値として使う。
+         * EKFは両方黒の曖昧な状態を棄却し、両方白の場合は弱い観測更新を行う。 */
         const float sensor_difference =
             normalized_left - normalized_right;
         const line_state_t line_state =
@@ -1769,10 +1767,10 @@ void Main(intptr_t exinf)
                 line_state
             );
 
-        /* Use EKF cross-track and heading error for steering. The heading
-         * look-ahead term anticipates the direction in which the robot is
-         * pointing relative to the local line tangent. Convert mm back to
-         * the original reflectance-difference scale for the existing PID. */
+        /* EKFが推定した横偏差と方位誤差を操舵に使う。
+         * 方位誤差に先読み距離を掛け、機体が局所的なライン接線方向に対して
+         * どちらを向いているかを操舵量に反映する。
+         * 既存PIDの入力尺度に合わせるため、mm単位の偏差を反射光差の尺度に戻す。 */
         float error =
             (line_ekf.x[EKF_EY] +
              LINE_EKF_HEADING_LOOKAHEAD_MM * line_ekf.x[EKF_EPSI]) /
@@ -1819,14 +1817,14 @@ void Main(intptr_t exinf)
             base_speed = (int32_t)map_reference.target_speed_deg_s;
         }
 
-        /* Any measured turn reduces the straight-line speed ceiling slightly.
-         * A stronger line error or yaw rate can reduce it further below. */
+        /* 旋回が検出された場合は、直進時の速度上限を少し下げる。
+         * ライン偏差や旋回角速度がさらに大きい場合は、後続処理で追加減速する。 */
         if (motion_state != MOTION_STATE_STRAIGHT &&
             base_speed > BASE_SPEED_STRAIGHT - 15) {
             base_speed = BASE_SPEED_STRAIGHT - 15;
         }
 
-        /* Slow down for ambiguous transitions and wide-line/crossing states. */
+        /* 状態が曖昧な遷移中や、幅の広いライン・交差部では減速する */
         if (line_state == LINE_STATE_BOTH_DARK &&
             base_speed > LINE_BOTH_DARK_MAX_SPEED) {
             base_speed = LINE_BOTH_DARK_MAX_SPEED;
@@ -1835,9 +1833,9 @@ void Main(intptr_t exinf)
             base_speed = LINE_TRANSITION_MAX_SPEED;
         }
 
-        /* Encoder-derived yaw-rate feedback damps actual chassis rotation.
-         * With this motor sign convention, positive yaw is a left turn and
-         * positive steering commands a rightward correction. */
+        /* エンコーダから推定した旋回角速度をフィードバックし、機体の回転を抑える。
+         * このモーター符号設定では、正のヨー角速度は左旋回を表し、
+         * 正の操舵量は右方向への修正指令になる。 */
         const float odometry_damping =
             ODOM_YAW_DAMPING_GAIN * odometry.yaw_rate_deg_s;
 
@@ -1874,8 +1872,8 @@ void Main(intptr_t exinf)
         const bool pushes_low =
             candidate_output < -steering_limit && error < 0.0f;
 
-        /* Do not integrate while both sensors are over black: the pair no
-         * longer provides a trustworthy left/right position difference. */
+        /* 左右両方のセンサーが黒を検出している間は積分しない。
+         * この状態では、左右位置の差を信頼できる形で取得できないため。 */
         if (line_state != LINE_STATE_BOTH_DARK &&
             !pushes_high && !pushes_low) {
             integral = integral_candidate;
@@ -1883,8 +1881,8 @@ void Main(intptr_t exinf)
 
         float steering;
         if (line_state == LINE_STATE_BOTH_DARK) {
-            /* Carry the last steering direction through a wide line or
-             * crossing, while encoder yaw feedback gently damps rotation. */
+            /* 幅の広いラインや交差部では直前の操舵方向を引き継ぎ、
+             * エンコーダによる旋回角速度のフィードバックで回転を穏やかに抑える。 */
             steering = clamp_float(
                 last_steering + odometry_damping,
                 -steering_limit,
@@ -1929,8 +1927,8 @@ void Main(intptr_t exinf)
                    (int)left_result, (int)right_result);
         }
 
-        /* 5 Hz diagnostics: raw sensor values, line/motion state,
-         * wheel-vs-gyro yaw, fused pose, and commanded wheel speeds. */
+        /* 5Hzの診断ログ：センサーの生値、ライン・運動状態、
+         * エンコーダとジャイロの旋回量、EKFの推定状態、左右モーター指令値。 */
         imu_log_ticks++;
         if (imu_log_ticks >= IMU_LOG_INTERVAL_TICKS) {
             imu_log_ticks = 0;

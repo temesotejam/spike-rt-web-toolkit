@@ -108,116 +108,116 @@ SUB_TASK2 = 1
 
 ## PID_Line_Tracer_V2
 
-[PID_Line_Tracer](PID_Line_Tracer/PID_Line_Tracer.c)を残したまま、標準SPIKE-RT v0.2.0 APIだけで制御周期とPID演算を改善した別バージョンです。モーター・カラーセンサー・フォースセンサーのドライバは変更していません。
+[PID_Line_Tracer](PID_Line_Tracer/PID_Line_Tracer.c)を残したまま、標準SPIKE-RT v0.2.0 APIだけを使って制御周期とPID演算を改善した別バージョンです。モーター・カラーセンサー・フォースセンサーのドライバは変更していません。
 
-### Hardware and ports
+### 機体・ポート構成
 
-| Device | Port |
+| 機器 | ポート |
 | --- | --- |
-| Left motor | A |
-| Right motor | E |
-| Left color sensor | B |
-| Right color sensor | F |
-| Start/stop force sensor | C |
+| 左モーター | A |
+| 右モーター | E |
+| 左カラーセンサー | B |
+| 右カラーセンサー | F |
+| 開始・停止用フォースセンサー | C |
 
-### Mode selection and operation
+### モード選択と操作方法
 
-The Hub display shows one letter for the current selection:
+Hubの画面には、現在選択しているモードを1文字で表示します。
 
-- **L**: line tracing
-- **C**: calibration
+- **L**：ライントレース
+- **C**：校正
 
-Use the Hub's LEFT button to select line tracing, RIGHT button to select calibration, and CENTER button to confirm. The force sensor on port C remains the line-tracing start/stop control.
+Hubの左ボタンでライントレース、右ボタンで校正を選択し、中央ボタンで決定します。Cポートのフォースセンサーは、ライントレースの開始・停止に使用します。
 
-After a successful calibration, the robot stops and returns to the mode-selection screen. Select **L** and confirm to enter line-tracing standby. Press the force sensor on C to start; press it again to stop. Calibration values remain in RAM until power-off.
+校正に成功すると機体が停止し、モード選択画面に戻ります。**L**を選択して決定すると、ライントレースの待機状態になります。Cポートのフォースセンサーを押すと走行を開始し、もう一度押すと停止します。校正値は電源を切るまでRAM上に保持されます。
 
-### Moving calibration across a transverse line
+### 横断ラインを使った移動校正
 
-Place the robot on the white surface, facing straight toward a black line that crosses the direction of travel. Both color sensors (B and F) must initially be on white. Select **C** and confirm.
+機体を白い面に置き、進行方向に対して横切る黒いラインに向けてまっすぐ配置します。左右のカラーセンサー（B/F）は、どちらも最初は白い面を検出している必要があります。モード選択で **C** を選んで決定します。
 
-1. The robot samples both white surfaces while stationary.
-2. It drives forward at a low speed while synchronizing the left/right wheel encoders.
-3. Each sensor independently records its transition from white to black and then back to white.
-4. The robot brakes only after both sensors have completed the full white -> black -> white sequence.
-5. White and black averages are calculated separately for the left and right sensors. The result is accepted only when both sensors have sufficient black samples and sufficient white/black contrast.
+1. 機体が停止した状態で、左右の白色面を測定します。
+2. 左右の車輪エンコーダを同期させながら、低速で前進します。
+3. 左右のセンサーが、それぞれ白から黒、黒から白へ変化する過程を個別に記録します。
+4. 左右両方のセンサーが白 -> 黒 -> 白の全過程を完了した後に、モーターを停止します。
+5. 左右それぞれについて白色・黒色の平均値を計算します。黒色の測定サンプル数と白黒のコントラストが十分な場合だけ、校正結果を有効にします。
 
-The calibration pass has a maximum travel limit and timeout. The CENTER button cancels the pass. A failed or cancelled attempt does not overwrite a previous successful calibration. If calibration fails, check the initial placement, sensor height, line width, and reflection contrast before retrying.
+校正走行には最大移動量とタイムアウトを設定しています。中央ボタンを押すと校正を中止できます。失敗または中止した場合、以前に成功した校正値は上書きしません。校正に失敗した場合は、開始位置、センサーの高さ、ライン幅、反射光のコントラストを確認してから再試行してください。
 
-### Improvements
+### 主な改善点
 
-1. **Periodic control wake-up:** a 10ms cyclic handler releases a binary semaphore. The control task waits on that semaphore instead of adding a relative 10ms delay after every calculation.
-2. **Measured elapsed time:** `fch_hrt()` measures the actual interval between control iterations. The PID derivative and integral use this measured interval, with bounds for abnormal delays.
-3. **Per-sensor calibration:** the moving calibration measures white and black reflectance independently for sensors B and F. Each sensor is normalized to a common 0..100 scale (black=0, white=100), compensating for sensor-to-sensor differences.
-4. **Line-state classification:** normalized readings classify the pair as centered, left sensor over the line, right sensor over the line, both sensors dark (wide line/crossing), or transition. Both-dark holds the previous steering direction and slows down; transition also limits speed.
-5. **Encoder odometry:** encoder angle increments from motors A/E are converted to wheel travel using the M_S6 values (88 mm wheel diameter, 144 mm track). Encoder-only X/Y, heading, distance, speed, yaw rate, and curvature are retained as an independent diagnostic reference.
-6. **Six-state line-relative EKF:** the state is `[s, e_y, e_psi, omega, b_g, kappa]`: along-track distance, cross-track error, heading error, yaw rate, gyro bias, and local path curvature.
-7. **Three sensor observation sources:** raw IMU gyro Z observes `omega + b_g`; differential encoder speed observes `omega`; calibrated B/F reflectance difference provides a gated lateral line observation of `e_y`.
-8. **Adaptive observation confidence:** gyro noise is initialized from stationary samples; encoder observation variance increases when gyro/encoder yaw disagree; line observations use different variances for edge, transition, centered, and both-dark states. Both-dark is rejected as ambiguous.
-9. **EKF-based steering:** the PID input uses estimated cross-track and heading error. EKF yaw rate provides steering damping and speed adaptation. High estimated uncertainty reduces speed rather than automatically stopping the robot.
-10. **Future course-map interface:** the EKF tracks along-route distance and local curvature. A currently inactive map hook can later provide route curvature and target speed without changing the EKF state definition.
-11. **Filtered derivative and anti-windup:** a first-order low-pass filter reduces derivative spikes, and conditional integration prevents windup during output saturation.
-12. **Start/stop input:** force sensor C toggles line-tracing operation. Three consecutive 10ms samples are required for a press or release, preventing repeated toggles while the sensor is held.
+1. **周期的な制御タスクの起床：** 10ms周期の周期ハンドラがバイナリセマフォを解放します。制御タスクは毎回の処理後に相対時間で10ms待つのではなく、このセマフォを待ちます。
+2. **実際の経過時間の測定：** `fch_hrt()`で制御ループ間の実際の経過時間を測定します。PIDの微分・積分計算にはこの時間を使い、異常な遅延に対して上下限を設けています。
+3. **センサーごとの校正：** 移動校正でB/Fそれぞれの白色・黒色反射光を測定します。各センサーの値を黒=0、白=100の共通尺度に正規化し、センサー間の個体差を補正します。
+4. **ライン状態の分類：** 正規化した反射光から、中央、左センサー側で黒を検出、右センサー側で黒を検出、両方黒、遷移中の状態に分類します。両方黒の場合は直前の操舵方向を維持して減速し、遷移中も速度を制限します。
+5. **エンコーダオドメトリ：** A/Eモーターのエンコーダ角度増分を、M_S6の寸法（タイヤ直径88mm、トレッド144mm）を使って車輪の移動量に変換します。エンコーダ単独のX/Y位置、方位、移動距離、速度、旋回角速度、曲率を、EKFとは独立した比較用データとして保持します。
+6. **6状態のライン相対EKF：** 状態を`[s, e_y, e_psi, omega, b_g, kappa]`とします。経路方向の距離、横偏差、方位誤差、旋回角速度、ジャイロバイアス、局所経路曲率を推定します。
+7. **3種類のセンサー観測：** 生のIMUジャイロZは`omega + b_g`を観測します。左右エンコーダの速度差は`omega`を観測します。校正済みB/Fの反射光差は、条件を確認したうえで横偏差`e_y`の観測に使います。
+8. **観測信頼度の調整：** ジャイロノイズは起動時の静止測定から求めます。ジャイロとエンコーダの旋回量が食い違う場合はエンコーダ観測の分散を大きくします。ライン観測は、片側が黒、遷移中、両方白、両方黒の状態ごとに分散を変えます。両方黒の場合は状態が曖昧なため観測を棄却します。
+9. **EKF推定値を使った操舵：** PIDへの入力には、EKFが推定した横偏差と方位誤差を使います。EKFの旋回角速度は操舵の抑制と速度調整に使います。推定の不確かさが大きい場合は、機体を自動停止させずに速度を下げます。
+10. **将来のコースマップ接続：** EKFは経路方向の距離と局所曲率を推定します。現在は無効なマップ接続口を用意しており、将来はコースデータから経路曲率と目標速度を取得できます。EKFの状態定義を変更せずに、年度ごとに異なるコースへ対応することを想定しています。
+11. **微分フィルタとアンチワインドアップ：** 一次ローパスフィルタで反射光ノイズによる微分値の急変を抑えます。また、出力飽和をさらに強める方向には積分しないようにします。
+12. **開始・停止操作：** Cポートのフォースセンサーでライントレースの開始・停止を切り替えます。押下・解放ともに10ms周期で3回連続して検出することで、押しっぱなしによる連続切り替えを防ぎます。
 
-The EKF currently estimates position in a **local line-relative frame**, not global course X/Y coordinates. The along-track coordinate starts at zero for each run and is primarily propagated by wheel speed; cross-track error is corrected by the two color sensors. The line measurement conversion uses the provisional parameter `LINE_EKF_MM_PER_PERCENT=0.10` mm per normalized-reflectance percentage point. This is a tunable approximation because the actual B/F sensor spacing and course line width have not yet been measured. Both-white observations are weak and gated; both-dark observations are rejected. A later course-map module can transform local `(s, e_y)` into global map coordinates and add landmark/map observations.
+現在のEKFが推定する位置は、**コース全体の絶対座標ではなく、局所的なライン相対座標系**です。経路方向の座標は走行ごとに0から始まり、主に車輪速度から更新します。横偏差は左右のカラーセンサーで補正します。ライン観測値の変換には、暫定値`LINE_EKF_MM_PER_PERCENT=0.10`（正規化反射光1ポイントあたり0.10mm）を使用します。B/Fセンサー間隔とコースのライン幅を実測していないため、この値は調整が必要です。両方白の観測は弱い観測として扱い、条件を満たす場合だけ更新します。両方黒の観測は棄却します。将来はコースマップ機能で局所座標`(s, e_y)`をコース全体の座標に変換し、ランドマークや地図情報による観測を追加できます。
 
-### Six-state EKF: IMU + encoder + line observations
+### 6状態EKF：IMU・エンコーダ・ライン観測の統合
 
-The fixed 85/15 gyro/encoder blend has been replaced by a six-state Extended Kalman Filter. It uses only the standard SPIKE-RT v0.2.0 APIs; no kernel or device-driver changes are made.
+従来のジャイロとエンコーダの固定85:15融合を、6状態の拡張カルマンフィルター（EKF）に置き換えました。標準SPIKE-RT v0.2.0 APIのみを使用し、カーネルやデバイスドライバは変更していません。
 
-The state vector is:
+状態ベクトルは次のとおりです。
 
 `x = [s, e_y, e_psi, omega, b_g, kappa]^T`
 
-| State | Meaning | Unit |
+| 状態 | 意味 | 単位 |
 | --- | --- | --- |
-| `s` | Distance along the current local line/path frame | mm |
-| `e_y` | Cross-track offset from the local line | mm |
-| `e_psi` | Robot heading error relative to the local line tangent | rad |
-| `omega` | Body yaw rate | rad/s |
-| `b_g` | Z-gyro bias | rad/s |
-| `kappa` | Local path curvature | 1/m |
+| `s` | 現在の局所ライン・経路に沿った距離 | mm |
+| `e_y` | 局所ラインからの横方向の偏差 | mm |
+| `e_psi` | 局所ラインの接線方向に対する機体の方位誤差 | rad |
+| `omega` | 機体のヨー角速度 | rad/s |
+| `b_g` | Z軸ジャイロのバイアス | rad/s |
+| `kappa` | 局所的な経路曲率 | 1/m |
 
-#### Prediction
+#### 予測ステップ
 
-The average measured wheel speed provides forward velocity. The current yaw-rate and curvature estimates propagate the local path-relative state:
+左右の車輪速度の平均から前進速度を求めます。現在の旋回角速度と曲率の推定値を使い、ラインに対する局所状態を次のように予測します。
 
 - `s += v * cos(e_psi) * dt`
 - `e_y += v * sin(e_psi) * dt`
 - `e_psi += (omega - v * kappa) * dt`
 
-The covariance is propagated with the nonlinear model Jacobian and process-noise terms. Curvature is a slowly varying state, so the filter can follow straight and curved local line sections without hardcoding a specific annual course.
+非線形モデルのヤコビ行列とプロセスノイズを使って共分散も予測します。曲率はゆっくり変化する状態として扱うため、年度ごとの特定コース形状をプログラムに固定せず、直線と曲線の両方に対応できる構成です。
 
-#### Sequential observation updates
+#### センサーごとの観測更新
 
-1. **IMU gyro Z:** raw gyro Z is modeled as `z_g = omega + b_g + noise`. The startup stationary bias estimate initializes `b_g`; the EKF can then refine it while moving.
-2. **Wheel encoders A/E:** measured left/right motor speeds produce an independent differential-drive yaw-rate observation. Its variance is increased when the gyro and encoder disagree, reducing the influence of a possible wheel-slip measurement.
-3. **Color sensors B/F:** the calibrated normalized-reflectance difference provides a provisional lateral observation of `e_y`. Edge observations receive higher confidence, transition observations lower confidence, centered both-white observations are weak and gated, and both-dark observations are rejected as ambiguous.
+1. **IMUジャイロZ：** 生のジャイロZを`z_g = omega + b_g + noise`として扱います。起動時に静止状態で求めたバイアスを初期値にし、走行中もEKFで補正します。
+2. **左右エンコーダA/E：** 左右モーターの実測速度から、独立した差動二輪の旋回角速度を求めます。ジャイロとエンコーダが食い違う場合は観測分散を大きくし、車輪スリップなどの影響を弱めます。
+3. **カラーセンサーB/F：** 校正済みの正規化反射光差から、横偏差`e_y`の暫定観測値を作ります。片側が黒の場合は比較的高い信頼度、遷移中は低い信頼度とします。両方白の場合は弱い観測として条件付きで使用し、両方黒の場合は曖昧なため棄却します。
 
-The scalar observation updates use an innovation gate and Joseph-form covariance update. The EKF covariance is retained and its standard deviations are logged; it is also used to reduce the commanded speed when position/heading uncertainty becomes large.
+スカラー観測の更新にはイノベーションゲートとJoseph形式の共分散更新を使用します。EKFの共分散を保持し、標準偏差をログに出力します。位置や方位の不確かさが大きくなった場合は、指令速度を下げます。
 
-#### Line observation approximation
+#### ライン観測の近似モデル
 
-The current line observation is:
+現在のライン観測値は次の式で計算します。
 
 `z_line = (normalized_left - normalized_right) * LINE_EKF_MM_PER_PERCENT`
 
-The initial `LINE_EKF_MM_PER_PERCENT=0.10` is an **engineering starting value**, not a measured property of the robot. It must be tuned using the actual B/F sensor spacing, sensor height, and line width. The current moving white-black-white calibration estimates each sensor's reflectance range; it does not yet calibrate the lateral millimeter-per-reflectance relationship.
+初期値`LINE_EKF_MM_PER_PERCENT=0.10`は、機体の実測値ではなく**設計上の仮の値**です。B/Fセンサー間隔、センサーの高さ、ライン幅を実測して調整する必要があります。現在の白・黒・白の移動校正で取得するのは各センサーの反射光範囲であり、反射光差を横方向のmm単位の偏差に変換する係数までは校正していません。
 
-#### Course-map integration (future hook)
+#### コースマップとの接続（将来の拡張）
 
-No ETロボコン2023 route is hardcoded. The current `course_map_get_reference(s)` hook returns `valid=false`. Once a course file is loaded, it can provide local path curvature and a target speed at the EKF along-track coordinate. A map matcher can later add landmark/segment observations to convert local `(s, e_y, e_psi)` into global course coordinates. This keeps the estimator independent of which annual course segment is selected.
+ETロボコン2023のコースをプログラムに固定していません。現在の`course_map_get_reference(s)`は`valid=false`を返します。将来コースファイルを読み込むと、この関数からEKFの経路方向の位置に対応する局所曲率と目標速度を取得できます。さらにマップマッチングを追加すれば、ランドマークや経路区間の観測を使い、局所座標`(s, e_y, e_psi)`をコース全体の座標に変換できます。これにより、年度ごとに使用するコース区間が変わっても、推定器本体を独立して維持できます。
 
-#### Diagnostics
+#### 診断ログ
 
-At nominal 5 Hz, syslog records line/motion state, raw and normalized reflectance, accepted/rejected line observation status, encoder-only odometry, EKF state, EKF uncertainty, gyro bias estimate, and motor commands. While waiting for the force-sensor start command, idle logs remain available for stationary gyro and hand-rotation checks.
+通常は5Hzで、ライン状態・機体運動状態、生の反射光と正規化反射光、ライン観測の採用・棄却、エンコーダ単独のオドメトリ、EKF状態、EKFの不確かさ、ジャイロバイアス推定値、モーター指令値をシステムログに出力します。フォースセンサーで走行を開始する前の待機中も、静止時のジャイロノイズや手で機体を回したときの符号を確認できるログを取得します。
 
-**Limitations:** the EKF is currently local line-relative localization, not global map localization. Along-track position still accumulates encoder error. The lateral line observation is an approximate scalar model until sensor spacing and line width are measured. The curvature state is locally estimated; the route map is not loaded yet. Wheel slip, sensor timing, gyro bias drift, and the actual line/sensor geometry must be checked using real logs before treating the tuning values as final.
+**制約事項：** 現在のEKFは局所的なライン相対位置の推定であり、コース全体に対する絶対位置推定ではありません。経路方向の位置にはエンコーダ誤差が蓄積します。横方向のライン観測は、センサー間隔とライン幅を実測するまで近似的なスカラー観測です。曲率は局所的に推定しており、コースマップはまだ読み込んでいません。車輪スリップ、センサーのタイミング、ジャイロバイアスの変化、実際のラインとセンサーの幾何配置を実機ログで確認してから、各調整値を確定してください。
 
-### Initial tuning values
+### 初期調整値
 
-The original exercise gains are retained as initial values: `KP=1.0`, `KI=0.1`, and `KD=0.1`. The straight/turn base speeds start at 120/80 deg/s. Calibration speed starts at 60 deg/s. These are initial values, not verified optimum values; tune them on the actual course.
+元の演習プログラムのPIDゲインを初期値として引き継いでいます。`KP=1.0`、`KI=0.1`、`KD=0.1`です。直進・旋回時の基準速度は120/80 deg/s、校正時の速度は60 deg/sから開始します。これらは初期値であり、最適値を実機で確認したものではありません。実際のコースで調整してください。
 
-The cyclic handler performs only a semaphore notification. Sensor reads, calibration, PID calculations, and motor commands run in ordinary task context. If a control iteration falls behind, the binary semaphore limits pending notifications to one and an overrun warning is recorded. This improves scheduling behavior but does not guarantee a hard 10ms deadline; verify timing on the actual Hub.
+周期ハンドラはセマフォ通知だけを行います。センサー取得、校正、PID演算、モーター指令は通常タスクのコンテキストで実行します。制御処理が遅れた場合、バイナリセマフォによって未処理通知を最大1件に制限し、オーバーラン警告を記録します。これによりスケジューリング上の扱いは改善しますが、10msのハードリアルタイム期限を保証するものではありません。実際のHubで処理時間を確認してください。
 
 ## cyc_task：周期ハンドラの動作と改造内容
 
