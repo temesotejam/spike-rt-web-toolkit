@@ -1881,7 +1881,7 @@ void Main(intptr_t exinf)
                 latest_run_error_right = 0;
                 latest_force_press_duration_ms = 0;
                 run_start_hrt = now_hrt;
-                imu_log_ticks = 0;
+                diagnostic_log_ticks = 0;
 
                 integral = 0.0f;
                 last_error = 0.0f;
@@ -1936,9 +1936,9 @@ void Main(intptr_t exinf)
             }
 
             /* 待機中はモーターを動かさず、オドメトリだけを診断する。 */
-            imu_log_ticks++;
-            if (imu_log_ticks >= IMU_LOG_INTERVAL_TICKS) {
-                imu_log_ticks = 0;
+            diagnostic_log_ticks++;
+            if (diagnostic_log_ticks >= DIAGNOSTIC_LOG_INTERVAL_TICKS) {
+                diagnostic_log_ticks = 0;
                 syslog(LOG_NOTICE,
                        "IDLE ODOM X=%ld Y=%ld D=%ld Hx10=%ld V=%ld YAWx10=%ld",
                        (long)odometry.x_mm, (long)odometry.y_mm,
@@ -2141,9 +2141,9 @@ void Main(intptr_t exinf)
 
         /* 5Hzの診断ログ：センサーの生値、ライン・運動状態、
          * エンコーダとジャイロの旋回量、EKFの推定状態、左右モーター指令値。 */
-        imu_log_ticks++;
-        if (imu_log_ticks >= IMU_LOG_INTERVAL_TICKS) {
-            imu_log_ticks = 0;
+        diagnostic_log_ticks++;
+        if (diagnostic_log_ticks >= DIAGNOSTIC_LOG_INTERVAL_TICKS) {
+            diagnostic_log_ticks = 0;
 
             append_run_log(
                 now_hrt,
