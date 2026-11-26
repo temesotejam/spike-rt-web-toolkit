@@ -1940,11 +1940,13 @@ void Main(intptr_t exinf)
             if (diagnostic_log_ticks >= DIAGNOSTIC_LOG_INTERVAL_TICKS) {
                 diagnostic_log_ticks = 0;
                 syslog(LOG_NOTICE,
-                       "IDLE ODOM X=%ld Y=%ld D=%ld Hx10=%ld V=%ld YAWx10=%ld",
+                       "IDLE ODOM X=%ld Y=%ld D=%ld Hx10=%ld V=%ld",
                        (long)odometry.x_mm, (long)odometry.y_mm,
                        (long)odometry.distance_mm,
                        (long)(odometry.heading_rad * ODOM_RAD_TO_DEG * 10.0f),
-                       (long)odometry.linear_speed_mm_s,
+                       (long)odometry.linear_speed_mm_s);
+                syslog(LOG_NOTICE,
+                       "IDLE ODOM YAWx10=%ld",
                        (long)(odometry.encoder_yaw_rate_deg_s * 10.0f));
             }
             continue;
@@ -2139,8 +2141,8 @@ void Main(intptr_t exinf)
                    (int)left_result, (int)right_result);
         }
 
-        /* 5Hzの診断ログ：センサーの生値、ライン・運動状態、
-         * エンコーダとジャイロの旋回量、EKFの推定状態、左右モーター指令値。 */
+        /* 5Hzの診断ログ：センサーの生値・正規化値、ライン状態、
+         * 車輪エンコーダオドメトリ、左右モーター指令値。 */
         diagnostic_log_ticks++;
         if (diagnostic_log_ticks >= DIAGNOSTIC_LOG_INTERVAL_TICKS) {
             diagnostic_log_ticks = 0;
@@ -2166,24 +2168,28 @@ void Main(intptr_t exinf)
             );
 
             syslog(LOG_NOTICE,
-                   "TRACE t=%ld LS=%s MS=%s RAW=%ld,%ld NORMx10=%ld,%ld ERRx10=%ld STEERx10=%ld",
+                   "TRACE t=%ld LS=%s MS=%s RAW=%ld,%ld",
                    (long)(now_hrt / 1000U),
                    line_state_name(line_state),
                    motion_state_name(motion_state),
                    (long)reflection_left,
-                   (long)reflection_right,
+                   (long)reflection_right);
+            syslog(LOG_NOTICE,
+                   "TRACE SENSE NORMx10=%ld,%ld ERRx10=%ld STEERx10=%ld",
                    (long)(normalized_left * 10.0f),
                    (long)(normalized_right * 10.0f),
                    (long)(error * 10.0f),
                    (long)(steering * 10.0f));
 
             syslog(LOG_NOTICE,
-                   "ODOM ENC_Hx10=%ld X=%ld Y=%ld D=%ld V=%ld Kx1000=%ld",
+                   "ODOM ENC_Hx10=%ld X=%ld Y=%ld D=%ld V=%ld",
                    (long)(odometry.heading_rad * ODOM_RAD_TO_DEG * 10.0f),
                    (long)odometry.x_mm,
                    (long)odometry.y_mm,
                    (long)odometry.distance_mm,
-                   (long)odometry.linear_speed_mm_s,
+                   (long)odometry.linear_speed_mm_s);
+            syslog(LOG_NOTICE,
+                   "ODOM CURVATUREx1000=%ld",
                    (long)(odometry.curvature_per_m * 1000.0f));
 
             syslog(LOG_NOTICE,
@@ -2195,14 +2201,9 @@ void Main(intptr_t exinf)
                    (long)(odometry.heading_rad * ODOM_RAD_TO_DEG * 10.0f));
 
             syslog(LOG_NOTICE,
-                   "MOTOR CMD L=%ld R=%ld ACCx10=%ld,%ld,%ld GYROx10=%ld,%ld",
+                   "MOTOR CMD L=%ld R=%ld",
                    (long)left_speed,
-                   (long)right_speed,
-                   (long)(acceleration[0] * 10.0f),
-                   (long)(acceleration[1] * 10.0f),
-                   (long)(acceleration[2] * 10.0f),
-                   (long)(angular_velocity[0] * 10.0f),
-                   (long)(angular_velocity[1] * 10.0f));
+                   (long)right_speed);
         }
 
         last_error = error;
