@@ -323,7 +323,17 @@ typedef struct {
 } run_log_record_t;
 
 static volatile uint32_t control_tick_overruns = 0;
-static line_calibration_t saved_calibration = {0};
+/* 実機で成功した校正値を初期値として使用する。
+ * 起動後に校正を行わなくても、この値でライントレースを開始できる。
+ * 値は2026-11-26の実測成功値（反射光スケール）：
+ * 左B 白82.4/黒26.4、右D 白72.1/黒21.1。 */
+static line_calibration_t saved_calibration = {
+    .white_left = 82.4f,
+    .black_left = 26.4f,
+    .white_right = 72.1f,
+    .black_right = 21.1f,
+    .valid = true
+};
 static run_log_record_t run_log[RUN_LOG_CAPACITY];
 static uint32_t run_log_count = 0;
 static uint32_t run_log_write_index = 0;
@@ -1358,6 +1368,8 @@ static app_mode_t select_mode(
 
     show_selected_mode(selected);
     syslog(LOG_NOTICE,
+           "PID V2: default calibration B=82.4/26.4 D=72.1/21.1");
+    syslog(LOG_NOTICE,
            "PID V2: LEFT/RIGHT=SELECT L/C/D, CENTER=CONFIRM");
 
     wait_hub_buttons_released();
@@ -1958,8 +1970,9 @@ void Main(intptr_t exinf)
     hub_speaker_set_volume(5);
     hub_speaker_play_tone(695, 200);
 
-    /* 校正値はモード選択画面に戻った後もRAM上に保持される。
-     * 電源を入れ直した場合は、再度校正する必要がある。 */
+    /* 起動時は実測成功値をデフォルト校正値として使用する。
+     * Cモードで校正に成功すれば、その実測値で上書きする。
+     * 値はRAM上に保持され、電源再投入時はデフォルト値に戻る。 */
     app_mode_t next_menu_selection = MODE_LINE_TRACE;
 
     while (1) {
