@@ -21,7 +21,7 @@
 #include "spike/hub/speaker.h"
 #include "spike/pup/motor.h"
 
-#define VOLUME              30
+#define VOLUME              5  /* 教室向けの小音量設定 */
 #define TASK_DELAY_US       10000
 
 /* M_S6と同じAdvanced Driving Base想定。実機の寸法に合わせて調整する。 */
