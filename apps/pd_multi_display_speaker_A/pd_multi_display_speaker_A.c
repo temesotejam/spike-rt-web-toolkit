@@ -7,7 +7,7 @@
 #include "spike/hub/speaker.h"   // サウンド
 
 #define TEMPO   18   /* 音符の相対長 (ms 相当) */
-#define VOLUME  50   /* 0～100 程度 */
+#define VOLUME  5    /* 0～100。小音量設定 */
 
 static inline void RingTone(int freq, int time_ms)
 {
