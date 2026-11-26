@@ -111,7 +111,7 @@
 #define CAL_STALL_IGNORE_US     500000U
 
 /* フォースセンサーの短押し判定とプログラム終了判定 */
-#define FORCE_PRESS_DEBOUNCE_US 30000U
+#define FORCE_PRESS_DEBOUNCE_US 120000U
 #define FORCE_LONG_PRESS_US     5000000U
 
 /* PIDゲインは演習プログラムの初期値を引き継ぐ */
@@ -201,6 +201,7 @@ typedef enum {
 typedef struct {
     bool active;
     uint32_t start_hrt;
+    uint32_t last_duration_us;
 } force_press_state_t;
 
 typedef enum {
@@ -215,7 +216,8 @@ typedef enum {
 typedef enum {
     RUN_ERROR_NONE = 0,
     RUN_ERROR_COLOR_SENSOR_INVALID,
-    RUN_ERROR_MOTOR_COMMAND
+    RUN_ERROR_MOTOR_COMMAND,
+    RUN_ERROR_FORCE_SENSOR_SHORT_PRESS
 } run_error_code_t;
 
 typedef enum {
@@ -360,6 +362,7 @@ static run_error_code_t latest_run_error_code = RUN_ERROR_NONE;
 static uint32_t latest_run_error_elapsed_ms = 0;
 static int32_t latest_run_error_left = 0;
 static int32_t latest_run_error_right = 0;
+static uint32_t latest_force_press_duration_ms = 0;
 static int line_status_light_state = -1;
 
 /* 浮動小数点値を指定範囲内に収める */
@@ -505,6 +508,7 @@ static const char *run_error_code_name(run_error_code_t code)
     switch (code) {
     case RUN_ERROR_COLOR_SENSOR_INVALID: return "COLOR_SENSOR_INVALID";
     case RUN_ERROR_MOTOR_COMMAND:        return "MOTOR_COMMAND_FAILED";
+    case RUN_ERROR_FORCE_SENSOR_SHORT_PRESS: return "FORCE_SENSOR_SHORT_PRESS";
     case RUN_ERROR_NONE:
     default:                             return "NONE";
     }
@@ -1366,6 +1370,7 @@ static force_press_event_t update_force_press(
     if (state->active) {
         const uint32_t duration_us =
             (uint32_t)(now_hrt - state->start_hrt);
+        state->last_duration_us = duration_us;
         state->active = false;
 
         if (duration_us >= FORCE_LONG_PRESS_US) {
@@ -2004,36 +2009,13 @@ void Main(intptr_t exinf)
            "PID V2: default calibration B=82.4/26.4 D=72.1/21.1");
     dly_tsk(3000000);
 
-    /* 内蔵LSM6DS3TR-C IMUを初期化し、静止状態でジャイロバイアスを推定する。
-     * IMUを利用できない場合も、エンコーダだけを使ってライントレースを続行できる。 */
+    /* IMUは使用しない。位置・方位は車輪エンコーダから推定する。 */
     float gyro_bias[3] = {0.0f, 0.0f, 0.0f};
     float gyro_stddev[3] = {0.0f, 0.0f, 0.0f};
-    const bool imu_available = initialize_imu(gyro_bias, gyro_stddev);
-    bool imu_fusion_enabled = imu_available;
-
-    if (imu_available) {
-        syslog(LOG_NOTICE,
-               "IMU bias x10 dps X=%ld Y=%ld Z=%ld",
-               (long)(gyro_bias[0] * 10.0f),
-               (long)(gyro_bias[1] * 10.0f),
-               (long)(gyro_bias[2] * 10.0f));
-
-        syslog(LOG_NOTICE,
-               "IMU noise x10 dps X=%ld Y=%ld Z=%ld",
-               (long)(gyro_stddev[0] * 10.0f),
-               (long)(gyro_stddev[1] * 10.0f),
-               (long)(gyro_stddev[2] * 10.0f));
-
-        if (gyro_stddev[2] > IMU_BIAS_WARN_STD_DPS ||
-            fabsf(gyro_bias[2]) > IMU_BIAS_MAX_ABS_DPS) {
-            imu_fusion_enabled = false;
-            syslog(LOG_WARNING,
-                   "IMU: gyro calibration quality low; encoder-only fusion fallback");
-        }
-    } else {
-        syslog(LOG_WARNING,
-               "IMU unavailable; continuing with encoder-only diagnostics");
-    }
+    const bool imu_available = false;
+    const bool imu_fusion_enabled = false;
+    syslog(LOG_NOTICE,
+           "PID V2: encoder odometry + B/D line feedback; IMU/EKF disabled");
 
     hub_speaker_set_volume(5);
     hub_speaker_play_tone(695, 200);
@@ -2254,6 +2236,13 @@ void Main(intptr_t exinf)
                 running = false;
                 run_finished = true;
                 latest_run_end_reason = RUN_END_FORCE_SENSOR;
+                latest_run_error_code = RUN_ERROR_FORCE_SENSOR_SHORT_PRESS;
+                latest_run_error_elapsed_ms =
+                    (uint32_t)(now_hrt - run_start_hrt) / 1000U;
+                latest_force_press_duration_ms =
+                    force_press.last_duration_us / 1000U;
+                latest_run_error_left = (int32_t)latest_force_press_duration_ms;
+                latest_run_error_right = 0;
                 latest_run_end_hrt = now_hrt;
                 pup_motor_brake(motor_left);
                 pup_motor_brake(motor_right);
@@ -2265,8 +2254,9 @@ void Main(intptr_t exinf)
                 pid_initialized = false;
 
                 syslog(LOG_NOTICE,
-                       "PID V2: stopped by short press on force sensor C; "
+                       "PID V2: stopped by force sensor C; press_ms=%lu "
                        "ODO D=%ld X=%ld Y=%ld H=%ld",
+                       (unsigned long)latest_force_press_duration_ms,
                        (long)odometry.distance_mm,
                        (long)odometry.x_mm,
                        (long)odometry.y_mm,
@@ -2283,6 +2273,7 @@ void Main(intptr_t exinf)
                 latest_run_error_elapsed_ms = 0;
                 latest_run_error_left = 0;
                 latest_run_error_right = 0;
+                latest_force_press_duration_ms = 0;
                 run_start_hrt = now_hrt;
                 imu_log_ticks = 0;
 
@@ -2292,13 +2283,11 @@ void Main(intptr_t exinf)
                 last_steering = 0.0f;
                 pid_initialized = false;
                 reset_odometry(&odometry);
-                line_ekf_reset(
-                    &line_ekf,
-                    imu_fusion_enabled ? gyro_bias[2] : 0.0f
-                );
+                /* EKFは使用しない。ログ互換用構造体はゼロ初期化のまま保持。 */
 
                 syslog(LOG_NOTICE,
-                       "PID V2: started by short press on force sensor C");
+                       "PID V2: started by force sensor C; press_ms=%lu",
+                       (unsigned long)(force_press.last_duration_us / 1000U));
             }
         }
 
@@ -2306,92 +2295,14 @@ void Main(intptr_t exinf)
             break;
         }
 
-        /* IMUドライバが保持している最新の測定値を取得する。
-         * 標準SPIKE-RT APIはドライバのデータを返すため、この制御タスクから
-         * アプリケーション側のI2C通信を新たに開始するわけではない。
-         * ジャイロバイアスはEKFの推定状態なので、生のジャイロZ値を保持する。 */
+        /* 車輪エンコーダのみで相対位置・方位・速度を更新する。 */
         float acceleration[3] = {0.0f, 0.0f, 0.0f};
         float angular_velocity[3] = {0.0f, 0.0f, 0.0f};
-        float gyro_z_raw_dps = 0.0f;
-
-        if (imu_available) {
-            hub_imu_get_acceleration(acceleration);
-            hub_imu_get_angular_velocity(angular_velocity);
-            gyro_z_raw_dps = angular_velocity[2];
-        }
-
-        /* 車輪エンコーダによるオドメトリは、比較用として独立に保持する */
         update_odometry(&odometry, motor_left, motor_right, dt);
-
-        /* EKFの予測にはエンコーダから求めた前進速度と、直前の旋回角速度・曲率状態を使う。
-         * コースファイルが追加されるまではマップ接続口が無効なので、
-         * EKF自身が局所的な曲率を推定する。 */
-        line_ekf_predict(&line_ekf, odometry.linear_speed_mm_s, dt);
-
-        const course_map_reference_t map_reference =
-            course_map_get_reference(line_ekf.x[EKF_S]);
-
-        if (map_reference.valid) {
-            line_ekf_update_map_curvature(
-                &line_ekf, map_reference.curvature_per_m);
-        }
-
-        /* エンコーダによる旋回観測は常に利用できる。
-         * ジャイロと大きく食い違う場合は、固定比率で混ぜるのではなく、
-         * エンコーダ観測の分散を大きくして影響を弱める。 */
-        const float gyro_corrected_for_compare =
-            gyro_z_raw_dps -
-            line_ekf.x[EKF_GYRO_BIAS] * ODOM_RAD_TO_DEG;
-        const float yaw_disagreement_dps = imu_available
-            ? fabsf(gyro_corrected_for_compare -
-                    odometry.encoder_yaw_rate_deg_s)
-            : 0.0f;
-
-        line_ekf_update_encoder(
-            &line_ekf,
-            odometry.encoder_yaw_rate_deg_s,
-            imu_fusion_enabled ? yaw_disagreement_dps : 0.0f
-        );
-
-        if (imu_fusion_enabled) {
-            line_ekf_update_gyro(
-                &line_ekf,
-                gyro_z_raw_dps,
-                gyro_stddev[2]
-            );
-        }
-
-        odometry.gyro_yaw_rate_deg_s = imu_available
-            ? gyro_z_raw_dps -
-              line_ekf.x[EKF_GYRO_BIAS] * ODOM_RAD_TO_DEG
-            : 0.0f;
-        odometry.yaw_rate_difference_deg_s =
-            odometry.gyro_yaw_rate_deg_s -
-            odometry.encoder_yaw_rate_deg_s;
-        odometry.yaw_rate_deg_s =
-            line_ekf.x[EKF_OMEGA] * ODOM_RAD_TO_DEG;
-
-        /* 不一致が継続した場合は、原因調査用の警告を出力する */
-        if (imu_fusion_enabled &&
-            fabsf(odometry.yaw_rate_difference_deg_s) >
-                IMU_ENCODER_DISAGREE_DPS) {
-            if (imu_disagree_ticks < IMU_DISAGREE_CONFIRM_TICKS) {
-                imu_disagree_ticks++;
-            }
-            if (imu_disagree_ticks >= IMU_DISAGREE_CONFIRM_TICKS &&
-                !imu_disagree_reported) {
-                imu_disagree_reported = true;
-                syslog(LOG_WARNING,
-                       "IMU/ENC yaw mismatch: gyro=%ld encoder=%ld dps",
-                       (long)odometry.gyro_yaw_rate_deg_s,
-                       (long)odometry.encoder_yaw_rate_deg_s);
-            }
-        } else {
-            imu_disagree_ticks = 0;
-            imu_disagree_reported = false;
-        }
+        odometry.yaw_rate_deg_s = odometry.encoder_yaw_rate_deg_s;
 
         const motion_state_t motion_state =
+            classify_motion(odometry.encoder_yaw_rate_deg_s);        const motion_state_t motion_state =
             classify_motion(odometry.yaw_rate_deg_s);
 
         if (!running) {
@@ -2419,30 +2330,22 @@ void Main(intptr_t exinf)
                 set_line_status_light((int)idle_state);
             }
 
-            /* 待機中の診断ログを使い、モーターを動かさずに静止時の測定と
-             * 手で機体を回したときのジャイロ符号を確認できるようにする。 */
+            /* 待機中はモーターを動かさず、オドメトリだけを診断する。 */
             imu_log_ticks++;
             if (imu_log_ticks >= IMU_LOG_INTERVAL_TICKS) {
                 imu_log_ticks = 0;
                 syslog(LOG_NOTICE,
-                       "IDLE IMU=%d USE=%d GZx10=%ld EZx10=%ld DIFFx10=%ld FZx10=%ld BGx10=%ld",
-                       imu_available ? 1 : 0,
-                       imu_fusion_enabled ? 1 : 0,
-                       (long)(odometry.gyro_yaw_rate_deg_s * 10.0f),
-                       (long)(odometry.encoder_yaw_rate_deg_s * 10.0f),
-                       (long)(odometry.yaw_rate_difference_deg_s * 10.0f),
-                       (long)(odometry.yaw_rate_deg_s * 10.0f),
-                       (long)(line_ekf.x[EKF_GYRO_BIAS] *
-                              ODOM_RAD_TO_DEG * 10.0f));
-                syslog(LOG_NOTICE,
-                       "EKF IDLE S=%ld EY=%ld EPSIx1000=%ld Kx1000=%ld SIG_EY=%ld",
-                       (long)line_ekf.x[EKF_S],
-                       (long)line_ekf.x[EKF_EY],
-                       (long)(line_ekf.x[EKF_EPSI] * 1000.0f),
-                       (long)(line_ekf.x[EKF_CURVATURE] * 1000.0f),
-                       (long)sqrtf(line_ekf.P[EKF_EY][EKF_EY]));
-                (void)acceleration;
+                       "IDLE ODOM X=%ld Y=%ld D=%ld Hx10=%ld V=%ld YAWx10=%ld",
+                       (long)odometry.x_mm, (long)odometry.y_mm,
+                       (long)odometry.distance_mm,
+                       (long)(odometry.heading_rad * ODOM_RAD_TO_DEG * 10.0f),
+                       (long)odometry.linear_speed_mm_s,
+                       (long)(odometry.encoder_yaw_rate_deg_s * 10.0f));
             }
+            continue;
+        }
+
+        const int32_t reflection_left            }
             continue;
         }
 
@@ -2483,31 +2386,15 @@ void Main(intptr_t exinf)
             saved_calibration.white_right
         );
 
-        /* 正規化した左右反射光の差を、ラインの横方向位置に関する観測値として使う。
-         * EKFは両方黒の曖昧な状態を棄却し、両方白の場合は弱い観測更新を行う。 */
+        /* B/Dの正規化反射光差を直接PID偏差として使う。 */
         const float sensor_difference =
             normalized_left - normalized_right;
         const line_state_t line_state =
             classify_line_state(
                 normalized_left, normalized_right, sensor_difference);
         set_line_status_light((int)line_state);
-
-        const bool line_observation_accepted =
-            line_ekf_update_line(
-                &line_ekf,
-                normalized_left,
-                normalized_right,
-                line_state
-            );
-
-        /* EKFが推定した横偏差と方位誤差を操舵に使う。
-         * 方位誤差に先読み距離を掛け、機体が局所的なライン接線方向に対して
-         * どちらを向いているかを操舵量に反映する。
-         * 既存PIDの入力尺度に合わせるため、mm単位の偏差を反射光差の尺度に戻す。 */
-        float error =
-            (line_ekf.x[EKF_EY] +
-             LINE_EKF_HEADING_LOOKAHEAD_MM * line_ekf.x[EKF_EPSI]) /
-            LINE_EKF_MM_PER_PERCENT;
+        const bool line_observation_accepted = false;
+        float error = sensor_difference;
 
         if (line_state == LINE_STATE_CENTERED &&
             fabsf(error) < LINE_CENTER_DEADBAND) {
@@ -2531,24 +2418,7 @@ void Main(intptr_t exinf)
 
         const float abs_error = fabsf(error);
         int32_t base_speed = calculate_base_speed(
-            abs_error, fabsf(odometry.yaw_rate_deg_s));
-
-        const float cross_track_sigma =
-            sqrtf(line_ekf.P[EKF_EY][EKF_EY]);
-        const float heading_sigma =
-            sqrtf(line_ekf.P[EKF_EPSI][EKF_EPSI]);
-
-        if ((cross_track_sigma > LINE_EKF_MAX_SIGMA_MM ||
-             heading_sigma > LINE_EKF_MAX_SIGMA_HEADING_RAD) &&
-            base_speed > BASE_SPEED_TURN) {
-            base_speed = BASE_SPEED_TURN;
-        }
-
-        if (map_reference.valid &&
-            map_reference.target_speed_deg_s > 0.0f &&
-            base_speed > (int32_t)map_reference.target_speed_deg_s) {
-            base_speed = (int32_t)map_reference.target_speed_deg_s;
-        }
+            abs_error, fabsf(odometry.encoder_yaw_rate_deg_s));
 
         /* 旋回が検出された場合は、直進時の速度上限を少し下げる。
          * ライン偏差や旋回角速度がさらに大きい場合は、後続処理で追加減速する。 */
@@ -2570,7 +2440,7 @@ void Main(intptr_t exinf)
          * このモーター符号設定では、正のヨー角速度は左旋回を表し、
          * 正の操舵量は右方向への修正指令になる。 */
         const float odometry_damping =
-            ODOM_YAW_DAMPING_GAIN * odometry.yaw_rate_deg_s;
+            ODOM_YAW_DAMPING_GAIN * odometry.encoder_yaw_rate_deg_s;
 
         float steering_limit = MAX_STEERING;
         const float limit_from_min =
@@ -2716,16 +2586,12 @@ void Main(intptr_t exinf)
                    (long)(odometry.curvature_per_m * 1000.0f));
 
             syslog(LOG_NOTICE,
-                   "EKF S=%ld EY=%ld EPSIx1000=%ld WZx10=%ld BGx10=%ld Kx1000=%ld SIGY=%ld SIGTHx1000=%ld LUP=%d",
-                   (long)line_ekf.x[EKF_S],
-                   (long)line_ekf.x[EKF_EY],
-                   (long)(line_ekf.x[EKF_EPSI] * 1000.0f),
-                   (long)(line_ekf.x[EKF_OMEGA] * ODOM_RAD_TO_DEG * 10.0f),
-                   (long)(line_ekf.x[EKF_GYRO_BIAS] * ODOM_RAD_TO_DEG * 10.0f),
-                   (long)(line_ekf.x[EKF_CURVATURE] * 1000.0f),
-                   (long)sqrtf(line_ekf.P[EKF_EY][EKF_EY]),
-                   (long)(sqrtf(line_ekf.P[EKF_EPSI][EKF_EPSI]) * 1000.0f),
-                   line_observation_accepted ? 1 : 0);
+                   "LINE OBS=%ld; ODOM D=%ld X=%ld Y=%ld Hx10=%ld",
+                   (long)(sensor_difference * 10.0f),
+                   (long)odometry.distance_mm,
+                   (long)odometry.x_mm,
+                   (long)odometry.y_mm,
+                   (long)(odometry.heading_rad * ODOM_RAD_TO_DEG * 10.0f));
 
             syslog(LOG_NOTICE,
                    "MOTOR CMD L=%ld R=%ld ACCx10=%ld,%ld,%ld GYROx10=%ld,%ld",
