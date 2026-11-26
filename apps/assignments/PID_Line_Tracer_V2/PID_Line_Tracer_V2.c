@@ -1348,9 +1348,11 @@ static const char *selected_mode_name(app_mode_t selected)
 
 /* 左右ボタンで3つのモードを選び、中央ボタンで決定する。
  * L=ライントレース、C=校正、D=走行・校正データのUSB出力。 */
-static app_mode_t select_mode(pup_device_t *start_stop_sensor)
+static app_mode_t select_mode(
+    pup_device_t *start_stop_sensor,
+    app_mode_t initial_selection)
 {
-    app_mode_t selected = MODE_LINE_TRACE;
+    app_mode_t selected = initial_selection;
     uint32_t previous = 0;
     force_press_state_t force_press = {0};
 
@@ -1958,8 +1960,11 @@ void Main(intptr_t exinf)
 
     /* 校正値はモード選択画面に戻った後もRAM上に保持される。
      * 電源を入れ直した場合は、再度校正する必要がある。 */
+    app_mode_t next_menu_selection = MODE_LINE_TRACE;
+
     while (1) {
-        const app_mode_t selected = select_mode(start_stop_sensor);
+        const app_mode_t selected =
+            select_mode(start_stop_sensor, next_menu_selection);
 
         if (selected == MODE_EXIT) {
             pup_motor_brake(motor_left);
@@ -1973,6 +1978,7 @@ void Main(intptr_t exinf)
             wait_hub_buttons_released();
 
             if (!start_control_clock()) {
+                next_menu_selection = MODE_CALIBRATION;
                 hub_display_char('E');
                 syslog(LOG_ERROR, "PID V2 CAL: failed to start control clock");
                 dly_tsk(1000000);
@@ -2002,6 +2008,7 @@ void Main(intptr_t exinf)
                        "PID V2: program terminated from calibration");
                 ext_tsk();
             } else if (result == CAL_RESULT_OK) {
+                next_menu_selection = MODE_LINE_TRACE;
                 saved_calibration = candidate;
                 saved_calibration.valid = true;
 
@@ -2009,13 +2016,15 @@ void Main(intptr_t exinf)
                 syslog(LOG_NOTICE,
                        "PID V2 CAL: success; return to mode menu");
             } else if (result == CAL_RESULT_CANCELLED) {
+                next_menu_selection = MODE_CALIBRATION;
                 hub_display_char('X');
                 syslog(LOG_NOTICE,
                        "PID V2 CAL: cancelled; previous calibration retained");
             } else {
+                next_menu_selection = MODE_CALIBRATION;
                 hub_display_char('E');
                 syslog(LOG_WARNING,
-                       "PID V2 CAL: failed; previous calibration retained");
+                       "PID V2 CAL: failed; previous calibration retained; retry available");
             }
 
             dly_tsk(1000000);
@@ -2046,6 +2055,7 @@ void Main(intptr_t exinf)
         }
 
         if (!saved_calibration.valid) {
+            next_menu_selection = MODE_CALIBRATION;
             hub_display_char('C');
             syslog(LOG_WARNING,
                    "PID V2: calibration required before line tracing");
