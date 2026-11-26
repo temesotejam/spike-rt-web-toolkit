@@ -14,7 +14,7 @@
  *   Hub左・右ボタン -> ライントレース／校正／データ出力を選択
  *   Hub中央ボタン   -> 決定
  *   フォースセンサーC短押し -> 走行開始／終了
- *   フォースセンサーC長押し（2.5秒） -> プログラム終了
+ *   フォースセンサーC長押し（5秒） -> プログラム終了
  *
  * 走行データ:
  *   走行中のセンサー値・オドメトリ・EKF状態・モーター指令をRAMに記録。
@@ -42,7 +42,7 @@
  *   - 将来、コースマップから曲率と目標速度を取得できる接続口を用意。
  *   - 生の観測値、3軸IMU、EKFの状態と共分散を5Hzで記録。
  *   - 直前の走行データと校正データをUSBシリアルへCSV出力。
- *   - フォースセンサーCの2.5秒長押しで、全モードからプログラムを終了。
+ *   - フォースセンサーCの5秒長押しで、全モードからプログラムを終了。
  *   - IMU初期化または静止校正の品質が不十分な場合はエンコーダのみで動作。
  */
 
@@ -110,7 +110,7 @@
 
 /* フォースセンサーの短押し判定とプログラム終了判定 */
 #define FORCE_PRESS_DEBOUNCE_US 30000U
-#define FORCE_LONG_PRESS_US     2500000U
+#define FORCE_LONG_PRESS_US     5000000U
 
 /* PIDゲインは演習プログラムの初期値を引き継ぐ */
 #define KP                      1.0f
@@ -1264,7 +1264,7 @@ static bool read_hub_buttons(uint32_t *pressed_bits)
 }
 
 /* フォースセンサーCの押下時間から短押し・長押しを判定する。
- * 短押しは解放時に通知し、2.5秒以上押し続けた場合は長押しを通知する。 */
+ * 短押しは解放時に通知し、5秒以上押し続けた場合は長押しを通知する。 */
 static force_press_event_t update_force_press(
     force_press_state_t *state,
     bool touched,
@@ -1375,7 +1375,7 @@ static app_mode_t select_mode(pup_device_t *start_stop_sensor)
         );
         if (force_event == FORCE_PRESS_LONG) {
             syslog(LOG_NOTICE,
-                   "PID V2: program exit by 2.5-second force-sensor hold");
+                   "PID V2: program exit by 5-second force-sensor hold");
             return MODE_EXIT;
         }
 
@@ -2136,7 +2136,7 @@ void Main(intptr_t exinf)
         }
 
         /* Cの短押しは解放時に走行開始・終了へ割り当てる。
-         * 2.5秒以上の長押しは、どの状態からでもプログラム終了とする。 */
+         * 5秒以上の長押しは、どの状態からでもプログラム終了とする。 */
         const force_press_event_t force_event = update_force_press(
             &force_press,
             pup_force_sensor_touched(start_stop_sensor),
@@ -2154,7 +2154,7 @@ void Main(intptr_t exinf)
             stop_control_clock();
             hub_display_char('E');
             syslog(LOG_NOTICE,
-                   "PID V2: program terminated by 2.5-second force-sensor hold");
+                   "PID V2: program terminated by 5-second force-sensor hold");
             ext_tsk();
         }
 
