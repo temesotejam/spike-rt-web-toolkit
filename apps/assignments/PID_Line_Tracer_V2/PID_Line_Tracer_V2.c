@@ -1394,8 +1394,6 @@ static app_mode_t select_mode(
 
     show_selected_mode(selected);
     syslog(LOG_NOTICE,
-           "PID V2: default calibration B=82.4/26.4 D=72.1/21.1");
-    syslog(LOG_NOTICE,
            "PID V2: LEFT/RIGHT=SELECT L/C/D, CENTER=CONFIRM");
 
     wait_hub_buttons_released();
@@ -1960,6 +1958,8 @@ void Main(intptr_t exinf)
 
     syslog(LOG_NOTICE,
            "PID V2: initialized; A/E motors, B/D colors, C force sensor");
+    syslog(LOG_NOTICE,
+           "PID V2: default calibration B=82.4/26.4 D=72.1/21.1");
     dly_tsk(3000000);
 
     /* 内蔵LSM6DS3TR-C IMUを初期化し、静止状態でジャイロバイアスを推定する。
