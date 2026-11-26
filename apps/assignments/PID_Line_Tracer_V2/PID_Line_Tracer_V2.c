@@ -2341,10 +2341,6 @@ void Main(intptr_t exinf)
             continue;
         }
 
-        const int32_t reflection_left            }
-            continue;
-        }
-
         const int32_t reflection_left =
             pup_color_sensor_reflection(sensor_left);
         const int32_t reflection_right =
