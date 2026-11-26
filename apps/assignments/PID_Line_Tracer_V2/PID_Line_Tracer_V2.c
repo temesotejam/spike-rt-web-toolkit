@@ -1953,7 +1953,7 @@ void Main(intptr_t exinf)
                "IMU unavailable; continuing with encoder-only diagnostics");
     }
 
-    hub_speaker_set_volume(100);
+    hub_speaker_set_volume(5);
     hub_speaker_play_tone(695, 200);
 
     /* 校正値はモード選択画面に戻った後もRAM上に保持される。
