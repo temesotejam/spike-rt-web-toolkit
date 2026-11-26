@@ -25,7 +25,7 @@
 #define SENSOR_INTERVAL_US       10000   /* 10msごとに状態を確認 */
 #define REQUIRED_SAMPLES         2       /* 2回連続で確認してチャタリングを抑制 */
 #define NOTE_CHECK_INTERVAL_MS   10
-#define SPEAKER_VOLUME           10
+#define SPEAKER_VOLUME           5  /* 教室向けの小音量設定 */
 
 /* 1: 環境光で判定（標準）。0: 反射光で判定する場合に切り替える。 */
 #define LID_DETECT_USE_AMBIENT   1
