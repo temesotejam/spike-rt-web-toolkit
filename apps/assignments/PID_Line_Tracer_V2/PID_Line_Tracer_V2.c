@@ -612,7 +612,7 @@ static bool export_latest_data(
                ? (latest_run_end_hrt - latest_run_start_hrt) / 1000U : 0U),
            run_end_reason_name(latest_run_end_reason));
     printf("# RUN_DIAGNOSTIC,code=%s,error_elapsed_ms=%lu,"
-           "detail_left=%ld,detail_right=%ld\\r\\n",
+           "detail_left=%ld,detail_right=%ld\r\n",
            run_error_code_name(latest_run_error_code),
            (unsigned long)latest_run_error_elapsed_ms,
            (long)latest_run_error_left,
