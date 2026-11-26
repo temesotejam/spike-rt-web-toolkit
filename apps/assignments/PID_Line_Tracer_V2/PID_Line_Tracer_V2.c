@@ -7,7 +7,7 @@
  *   左モーター       A（反時計回り）
  *   右モーター       E（時計回り）
  *   左カラーセンサー B
- *   右カラーセンサー F
+ *   右カラーセンサー D
  *   開始・停止用フォースセンサー C
  *
  * モード選択:
@@ -66,7 +66,7 @@
 
 /* ポート割り当て */
 #define LEFT_COLOR_SENSOR       PBIO_PORT_ID_B
-#define RIGHT_COLOR_SENSOR      PBIO_PORT_ID_F
+#define RIGHT_COLOR_SENSOR      PBIO_PORT_ID_D
 #define START_STOP_SENSOR       PBIO_PORT_ID_C
 #define LEFT_MOTOR              PBIO_PORT_ID_A
 #define RIGHT_MOTOR             PBIO_PORT_ID_E
@@ -150,7 +150,7 @@
 #define EKF_CURVATURE            5U
 #define EKF_INNOVATION_GATE2     16.0f
 
-/* 初期観測モデル。B/Fセンサー間隔とコースのライン幅を実測した後、
+/* 初期観測モデル。B/Dセンサー間隔とコースのライン幅を実測した後、
  * LINE_EKF_MM_PER_PERCENTを調整してください。 */
 #define LINE_EKF_MM_PER_PERCENT  0.10f
 #define LINE_EKF_MIN_DIFF        4.0f
@@ -1905,7 +1905,7 @@ void Main(intptr_t exinf)
         pup_force_sensor_get_device(START_STOP_SENSOR);
 
     if (sensor_left == NULL || sensor_right == NULL) {
-        syslog(LOG_ERROR, "PID V2: color sensor not found on B/F");
+        syslog(LOG_ERROR, "PID V2: color sensor not found on B/D");
         pup_motor_stop(motor_left);
         pup_motor_stop(motor_right);
         ext_tsk();
@@ -1919,7 +1919,7 @@ void Main(intptr_t exinf)
     }
 
     syslog(LOG_NOTICE,
-           "PID V2: initialized; A/E motors, B/F colors, C force sensor");
+           "PID V2: initialized; A/E motors, B/D colors, C force sensor");
     dly_tsk(3000000);
 
     /* 内蔵LSM6DS3TR-C IMUを初期化し、静止状態でジャイロバイアスを推定する。
