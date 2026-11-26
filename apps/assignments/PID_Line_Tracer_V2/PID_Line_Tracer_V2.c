@@ -43,6 +43,7 @@
  *   - 生の観測値、3軸IMU、EKFの状態と共分散を5Hzで記録。
  *   - 直前の走行データと校正データをUSBシリアルへCSV出力。
  *   - フォースセンサーCの5秒長押しで、全モードからプログラムを終了。
+ *   - Hub RGBライトでB/Dのライン認識状態を待機中・走行中に色表示。
  *   - IMU初期化または静止校正の品質が不十分な場合はエンコーダのみで動作。
  */
 
@@ -63,6 +64,7 @@
 #include "spike/hub/display.h"
 #include "spike/hub/speaker.h"
 #include "spike/hub/imu.h"
+#include "spike/hub/light.h"
 
 /* ポート割り当て */
 #define LEFT_COLOR_SENSOR       PBIO_PORT_ID_B
@@ -358,6 +360,7 @@ static run_error_code_t latest_run_error_code = RUN_ERROR_NONE;
 static uint32_t latest_run_error_elapsed_ms = 0;
 static int32_t latest_run_error_left = 0;
 static int32_t latest_run_error_right = 0;
+static int line_status_light_state = -1;
 
 /* 浮動小数点値を指定範囲内に収める */
 static float clamp_float(float value, float lower, float upper)
@@ -1286,6 +1289,44 @@ static line_state_t classify_line_state(
     return LINE_STATE_TRANSITION;
 }
 
+/* Hub RGB light: green=centered/both white, blue=left edge,
+ * orange=right edge, red=both dark or invalid sensor, yellow=transition.
+ * Update only when the recognized state changes. */
+static void set_line_status_light(int status)
+{
+    if (line_status_light_state == status) {
+        return;
+    }
+    switch (status) {
+    case LINE_STATE_CENTERED:
+        hub_light_on_color(PBIO_COLOR_GREEN);
+        break;
+    case LINE_STATE_LEFT_EDGE:
+        hub_light_on_color(PBIO_COLOR_BLUE);
+        break;
+    case LINE_STATE_RIGHT_EDGE:
+        hub_light_on_color(PBIO_COLOR_ORANGE);
+        break;
+    case LINE_STATE_BOTH_DARK:
+    case 5:
+        hub_light_on_color(PBIO_COLOR_RED);
+        break;
+    case LINE_STATE_TRANSITION:
+    default:
+        hub_light_on_color(PBIO_COLOR_YELLOW);
+        break;
+    }
+    line_status_light_state = status;
+}
+
+static void clear_line_status_light(void)
+{
+    if (line_status_light_state != -2) {
+        hub_light_off();
+        line_status_light_state = -2;
+    }
+}
+
 /* Hub APIから、現在押されている本体ボタンをビットマスクで取得する */
 static bool read_hub_buttons(uint32_t *pressed_bits)
 {
@@ -1392,6 +1433,7 @@ static app_mode_t select_mode(
     uint32_t previous = 0;
     force_press_state_t force_press = {0};
 
+    clear_line_status_light();
     show_selected_mode(selected);
     syslog(LOG_NOTICE,
            "PID V2: LEFT/RIGHT=SELECT L/C/D, CENTER=CONFIRM");
@@ -2353,6 +2395,30 @@ void Main(intptr_t exinf)
             classify_motion(odometry.yaw_rate_deg_s);
 
         if (!running) {
+            /* モーター停止中もB/Dの認識状態を表示し、走行前にラインとの位置関係を確認する。 */
+            const int32_t idle_left =
+                pup_color_sensor_reflection(sensor_left);
+            const int32_t idle_right =
+                pup_color_sensor_reflection(sensor_right);
+            if (!valid_reflection(idle_left) ||
+                !valid_reflection(idle_right)) {
+                set_line_status_light(5);
+            } else {
+                const float idle_norm_left = normalize_reflection(
+                    idle_left,
+                    saved_calibration.black_left,
+                    saved_calibration.white_left);
+                const float idle_norm_right = normalize_reflection(
+                    idle_right,
+                    saved_calibration.black_right,
+                    saved_calibration.white_right);
+                const line_state_t idle_state = classify_line_state(
+                    idle_norm_left,
+                    idle_norm_right,
+                    idle_norm_left - idle_norm_right);
+                set_line_status_light((int)idle_state);
+            }
+
             /* 待機中の診断ログを使い、モーターを動かさずに静止時の測定と
              * 手で機体を回したときのジャイロ符号を確認できるようにする。 */
             imu_log_ticks++;
@@ -2398,6 +2464,7 @@ void Main(intptr_t exinf)
             latest_run_error_left = reflection_left;
             latest_run_error_right = reflection_right;
             latest_run_end_hrt = now_hrt;
+            set_line_status_light(5);
             pid_initialized = false;
             integral = 0.0f;
             derivative_filtered = 0.0f;
@@ -2423,6 +2490,7 @@ void Main(intptr_t exinf)
         const line_state_t line_state =
             classify_line_state(
                 normalized_left, normalized_right, sensor_difference);
+        set_line_status_light((int)line_state);
 
         const bool line_observation_accepted =
             line_ekf_update_line(
