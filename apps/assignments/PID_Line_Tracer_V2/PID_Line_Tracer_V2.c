@@ -211,6 +211,12 @@ typedef enum {
 } run_end_reason_t;
 
 typedef enum {
+    RUN_ERROR_NONE = 0,
+    RUN_ERROR_COLOR_SENSOR_INVALID,
+    RUN_ERROR_MOTOR_COMMAND
+} run_error_code_t;
+
+typedef enum {
     CAL_SEEK_BLACK = 0,
     CAL_MEASURE_BLACK,
     CAL_SEEK_WHITE_AFTER,
@@ -348,6 +354,10 @@ static force_press_event_t update_force_press(
 static uint32_t latest_run_start_hrt = 0;
 static uint32_t latest_run_end_hrt = 0;
 static run_end_reason_t latest_run_end_reason = RUN_END_NONE;
+static run_error_code_t latest_run_error_code = RUN_ERROR_NONE;
+static uint32_t latest_run_error_elapsed_ms = 0;
+static int32_t latest_run_error_left = 0;
+static int32_t latest_run_error_right = 0;
 
 /* 浮動小数点値を指定範囲内に収める */
 static float clamp_float(float value, float lower, float upper)
@@ -487,6 +497,16 @@ static const char *run_end_reason_name(run_end_reason_t reason)
     }
 }
 
+static const char *run_error_code_name(run_error_code_t code)
+{
+    switch (code) {
+    case RUN_ERROR_COLOR_SENSOR_INVALID: return "COLOR_SENSOR_INVALID";
+    case RUN_ERROR_MOTOR_COMMAND:        return "MOTOR_COMMAND_FAILED";
+    case RUN_ERROR_NONE:
+    default:                             return "NONE";
+    }
+}
+
 /* 走行終了後に、校正値・IMU校正値・直前の走行ログをCSV形式でUSBへ出力する。
  * この処理は周期制御を停止した通常タスク上で実行する。 */
 static bool export_latest_data(
@@ -591,6 +611,12 @@ static bool export_latest_data(
            (unsigned long)(latest_run_valid
                ? (latest_run_end_hrt - latest_run_start_hrt) / 1000U : 0U),
            run_end_reason_name(latest_run_end_reason));
+    printf("# RUN_DIAGNOSTIC,code=%s,error_elapsed_ms=%lu,"
+           "detail_left=%ld,detail_right=%ld\\r\\n",
+           run_error_code_name(latest_run_error_code),
+           (unsigned long)latest_run_error_elapsed_ms,
+           (long)latest_run_error_left,
+           (long)latest_run_error_right);
     fflush(stdout);
     dly_tsk(20000U);
     if (update_force_press(
@@ -2211,6 +2237,10 @@ void Main(intptr_t exinf)
                 latest_run_start_hrt = now_hrt;
                 latest_run_end_hrt = 0;
                 latest_run_end_reason = RUN_END_RUNNING;
+                latest_run_error_code = RUN_ERROR_NONE;
+                latest_run_error_elapsed_ms = 0;
+                latest_run_error_left = 0;
+                latest_run_error_right = 0;
                 run_start_hrt = now_hrt;
                 imu_log_ticks = 0;
 
@@ -2362,6 +2392,11 @@ void Main(intptr_t exinf)
             running = false;
             run_finished = true;
             latest_run_end_reason = RUN_END_COLOR_SENSOR_ERROR;
+            latest_run_error_code = RUN_ERROR_COLOR_SENSOR_INVALID;
+            latest_run_error_elapsed_ms =
+                (uint32_t)(now_hrt - run_start_hrt) / 1000U;
+            latest_run_error_left = reflection_left;
+            latest_run_error_right = reflection_right;
             latest_run_end_hrt = now_hrt;
             pid_initialized = false;
             integral = 0.0f;
@@ -2548,6 +2583,11 @@ void Main(intptr_t exinf)
             running = false;
             run_finished = true;
             latest_run_end_reason = RUN_END_MOTOR_ERROR;
+            latest_run_error_code = RUN_ERROR_MOTOR_COMMAND;
+            latest_run_error_elapsed_ms =
+                (uint32_t)(now_hrt - run_start_hrt) / 1000U;
+            latest_run_error_left = (int32_t)left_result;
+            latest_run_error_right = (int32_t)right_result;
             latest_run_end_hrt = now_hrt;
             pid_initialized = false;
             integral = 0.0f;
