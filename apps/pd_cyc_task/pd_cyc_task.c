@@ -7,7 +7,7 @@
 #include "spike/hub/speaker.h"   // スピーカ（環境により header 名が異なる場合あり）
 
 #define TEMPO   18          /* 基本の音長(相対) */
-#define VOLUME  50          /* 音量 (0～100 程度) */
+#define VOLUME  5           /* 音量（0～100）。小音量設定 */
 
 // 周期ハンドラ: 1秒ごとにカウントを表示
 void test_spike_cychdr(intptr_t exinf)
