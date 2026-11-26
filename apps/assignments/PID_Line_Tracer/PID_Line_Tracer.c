@@ -148,7 +148,7 @@ void Main(intptr_t exinf)
     dly_tsk(3000000);
 
     /* 元プログラムの合図音は、ここでは走行開始ではなく操作受付の合図。 */
-    hub_speaker_set_volume(100);
+    hub_speaker_set_volume(5);
     hub_speaker_play_tone(695, 200);
     dly_tsk(200000);
 
