@@ -2152,10 +2152,7 @@ void Main(intptr_t exinf)
 
     odometry_t odometry = {0};
     line_ekf_t line_ekf = {0};
-    line_ekf_reset(
-        &line_ekf,
-        imu_fusion_enabled ? gyro_bias[2] : 0.0f
-    );
+    /* EKF is disabled; line_ekf remains zeroed only for legacy CSV compatibility. */
 
     uint32_t last_tick_hrt = 0;
     bool have_last_tick = false;
@@ -2302,8 +2299,7 @@ void Main(intptr_t exinf)
         odometry.yaw_rate_deg_s = odometry.encoder_yaw_rate_deg_s;
 
         const motion_state_t motion_state =
-            classify_motion(odometry.encoder_yaw_rate_deg_s);        const motion_state_t motion_state =
-            classify_motion(odometry.yaw_rate_deg_s);
+            classify_motion(odometry.encoder_yaw_rate_deg_s);
 
         if (!running) {
             /* モーター停止中もB/Dの認識状態を表示し、走行前にラインとの位置関係を確認する。 */
