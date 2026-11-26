@@ -22,8 +22,8 @@ void Main(intptr_t exinf)
     // 起動メッセージをシリアルモニタに出力
     syslog(LOG_NOTICE, "Program started.");
 
-    // 音量を100%に設定
-    hub_speaker_set_volume(100);
+    // 音量を5%に設定
+    hub_speaker_set_volume(5);
 
     // バッテリー電圧を取得して画面に表示
     uint16_t battery = hub_battery_get_voltage();
