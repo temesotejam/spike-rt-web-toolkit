@@ -42,7 +42,7 @@
  *   - 直前の走行データと校正データをUSBシリアルへCSV出力。
  *   - フォースセンサーCの5秒長押しで、全モードからプログラムを終了。
  *   - Hub RGBライトでB/Dのライン認識状態を待機中・走行中に色表示。
- *   - IMU初期化または静止校正の品質が不十分な場合はエンコーダのみで動作。
+ *   - IMU/EKFは使用せず、車輪エンコーダを位置・方位推定の基礎にする。
  */
 
 #include <kernel.h>
@@ -85,7 +85,7 @@
 #define IMU_DISAGREE_CONFIRM_TICKS 5U
 
 /* 診断ログの出力頻度は、100Hzの制御ループより低くする */
-#define IMU_LOG_INTERVAL_TICKS  20U
+#define DIAGNOSTIC_LOG_INTERVAL_TICKS  20U
 #define RUN_LOG_CAPACITY        512U
 
 /* Hubのモード選択ボタンを確認する周期 */
@@ -1767,9 +1767,7 @@ void Main(intptr_t exinf)
 
     uint32_t last_tick_hrt = 0;
     bool have_last_tick = false;
-    unsigned int imu_log_ticks = 0;
-    unsigned int imu_disagree_ticks = 0;
-    bool imu_disagree_reported = false;
+    unsigned int diagnostic_log_ticks = 0;
 
     syslog(LOG_NOTICE,
            "PID V2: line trace ready; force sensor C starts/stops");
