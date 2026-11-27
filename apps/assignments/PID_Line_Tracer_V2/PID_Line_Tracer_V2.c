@@ -130,6 +130,9 @@
 #define CURVE_FF_GAIN           0.65f
 #define CURVE_DEADBAND_PER_M    0.35f
 #define CURVE_LEARN_MAX_ERROR   12.0f
+#define CURVE_MIN_HISTORY_S      0.50f
+#define CURVE_MIN_HISTORY_MM     30.0f
+#define CURVE_BLEND_TAU_S        0.30f
 #define BRIDGE_MAX_MM           25.0f
 #define BRIDGE_MAX_US           450000U
 #define RECOVERY_BIAS           18.0f
@@ -1460,6 +1463,9 @@ void Main(intptr_t exinf)
     float last_direction = 0.0f;
     unsigned int boundary_ticks = 0;
     float curve_ref = 0.0f;
+    float curve_history_s = 0.0f;
+    float curve_history_mm = 0.0f;
+    float curve_blend = 0.0f;
     float previous_steering = 0.0f;
     bool had_boundary = false;
 
@@ -1561,6 +1567,9 @@ void Main(intptr_t exinf)
                 boundary_ticks = 0;
                 last_direction = 0.0f;
                 curve_ref = 0.0f;
+                curve_history_s = 0.0f;
+                curve_history_mm = 0.0f;
+                curve_blend = 0.0f;
                 previous_steering = 0.0f;
                 had_boundary = false;
                 pid_initialized = false;
@@ -1597,6 +1606,9 @@ void Main(intptr_t exinf)
                 boundary_ticks = 0;
                 last_direction = 0.0f;
                 curve_ref = 0.0f;
+                curve_history_s = 0.0f;
+                curve_history_mm = 0.0f;
+                curve_blend = 0.0f;
                 previous_steering = 0.0f;
                 had_boundary = false;
                 pid_initialized = false;
@@ -1700,6 +1712,10 @@ void Main(intptr_t exinf)
             if (boundary_ticks < RECOVERY_CONFIRM_TICKS) ++boundary_ticks;
             if (boundary_ticks >= RECOVERY_CONFIRM_TICKS && recovery) {
                 recovery = false;
+                curve_ref = 0.0f;
+                curve_history_s = 0.0f;
+                curve_history_mm = 0.0f;
+                curve_blend = 0.0f;
                 pid_initialized = false;
                 syslog(LOG_NOTICE, "BOUNDARY reacquired");
             }
@@ -1716,17 +1732,30 @@ void Main(intptr_t exinf)
             pid_initialized = false;
             syslog(LOG_NOTICE, "BOUNDARY recovery LS=%s", line_state_name(line_state));
         }
-        /* Estimate a slowly varying path curvature from actual wheel motion.
-         * Do not learn while searching or when large tracking corrections dominate. */
+        /* Learn only from a continuous, reliable interval of wheel motion.
+         * No feedforward at startup or after reacquisition until both gates pass. */
         if (!recovery) {
-            const float leak = clamp_float(CURVE_LEAK_PER_S * dt, 0.0f, 1.0f);
-            curve_ref *= 1.0f - leak;
-            if (matched && fabsf(error) <= CURVE_LEARN_MAX_ERROR &&
-                odometry.linear_speed_mm_s > 20.0f) {
-                float measured = clamp_float(odometry.curvature_per_m,
-                                             -CURVE_MAX_PER_M, CURVE_MAX_PER_M);
+            const bool reliable = matched && fabsf(error) <= CURVE_LEARN_MAX_ERROR &&
+                                  odometry.linear_speed_mm_s > 20.0f;
+            if (reliable) {
+                const float leak = clamp_float(CURVE_LEAK_PER_S * dt, 0.0f, 1.0f);
+                curve_ref *= 1.0f - leak;
+                const float measured = clamp_float(odometry.curvature_per_m,
+                                                   -CURVE_MAX_PER_M, CURVE_MAX_PER_M);
                 const float alpha = dt / (CURVE_TAU_S + dt);
                 curve_ref += alpha * (measured - curve_ref);
+                curve_history_s = fminf(CURVE_MIN_HISTORY_S, curve_history_s + dt);
+                curve_history_mm = fminf(CURVE_MIN_HISTORY_MM,
+                                         curve_history_mm + odometry.linear_speed_mm_s * dt);
+                if (curve_history_s >= CURVE_MIN_HISTORY_S &&
+                    curve_history_mm >= CURVE_MIN_HISTORY_MM) {
+                    curve_blend += dt / (CURVE_BLEND_TAU_S + dt) * (1.0f - curve_blend);
+                }
+            } else {
+                curve_history_s = 0.0f;
+                curve_history_mm = 0.0f;
+                curve_ref = 0.0f;
+                curve_blend = 0.0f;
             }
         }
         const float path_curve = fabsf(curve_ref) < CURVE_DEADBAND_PER_M ? 0.0f : curve_ref;
@@ -1770,7 +1799,7 @@ void Main(intptr_t exinf)
 
         /* Differential drive: positive curvature turns left; positive steering turns right.
          * Scale the remembered curvature to the current commanded forward speed. */
-        const float feedforward = -CURVE_FF_GAIN * (float)base_speed *
+        const float feedforward = -curve_blend * CURVE_FF_GAIN * (float)base_speed *
                                   WHEEL_TRACK_MM * path_curve / 2000.0f;
 
         float steering_limit = MAX_STEERING;
@@ -1829,12 +1858,11 @@ void Main(intptr_t exinf)
             }
             /* Continue the last reliable arc briefly across an ambiguous region.
              * Then search locally; never learn the search motion as course curvature. */
-            const bool bridge = had_boundary && lost_us < BRIDGE_MAX_US &&
+            const bool bridge = had_boundary && curve_blend > 0.0f && lost_us < BRIDGE_MAX_US &&
                                 lost_mm < BRIDGE_MAX_MM && !opposite;
             float direction = recovery_direction;
             if (lost_us >= RECOVERY_MAX_US / 2U) direction = -direction;
-            steering = feedforward;
-            if (!bridge && !matched) steering += direction * RECOVERY_BIAS;
+            steering = bridge || matched ? feedforward : direction * RECOVERY_BIAS;
         } else {
             steering = feedforward + p_term + KI * integral + d_term;
         }
@@ -1933,6 +1961,9 @@ void Main(intptr_t exinf)
                    (long)(feedforward * 10.0f),
                    (long)((recovery ? 0.0f : p_term + KI * integral + d_term) * 10.0f),
                    recovery ? 1 : 0);
+            syslog(LOG_NOTICE, "FF CONFx100=%ld HISTORY_MS=%ld HISTORY_MM=%ld",
+                   (long)(curve_blend * 100.0f), (long)(curve_history_s * 1000.0f),
+                   (long)curve_history_mm);
 
             syslog(LOG_NOTICE,
                    "MOTOR CMD L=%ld R=%ld",
