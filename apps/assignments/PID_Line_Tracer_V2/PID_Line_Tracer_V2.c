@@ -17,7 +17,7 @@
  *   フォースセンサーC長押し（5秒） -> プログラム終了
  *
  * 走行データ:
- *   走行中のセンサー値・オドメトリ・EKF状態・モーター指令をRAMに記録。
+ *   走行中のセンサー値・オドメトリ・モーター指令をRAMに記録。
  *   走行終了後はモード選択画面に戻り、USBシリアルからCSV形式で出力可能。
  *
  * 校正時の機体配置:
@@ -75,15 +75,6 @@
 #define CONTROL_DT_MIN_US       1000U
 #define CONTROL_DT_MAX_US       50000U
 
-/* IMUの初期化と、静止状態でのジャイロバイアス校正 */
-#define IMU_INIT_RETRY_COUNT    300U
-#define IMU_INIT_RETRY_US       10000U
-#define IMU_BIAS_SAMPLES        100U
-#define IMU_BIAS_SAMPLE_US      10000U
-#define IMU_BIAS_WARN_STD_DPS   3.0f
-#define IMU_BIAS_MAX_ABS_DPS    8.0f
-#define IMU_DISAGREE_CONFIRM_TICKS 5U
-
 /* 診断ログの出力頻度は、100Hzの制御ループより低くする */
 #define DIAGNOSTIC_LOG_INTERVAL_TICKS  20U
 #define RUN_LOG_CAPACITY        512U
@@ -134,46 +125,6 @@
 #define ODOM_YAW_RATE_THRESHOLD  8.0f
 #define ODOM_YAW_RATE_FULL       60.0f
 #define ODOM_YAW_DAMPING_GAIN    0.15f
-#define IMU_ENCODER_DISAGREE_DPS 35.0f
-
-/* 6状態の局所経路座標系EKF:
- * [s, 横偏差, 方位誤差, 旋回角速度, ジャイロバイアス, 経路曲率]
- * 単位: mm, mm, rad, rad/s, rad/s, 1/m
- */
-#define EKF_STATE_DIM            6U
-#define EKF_S                    0U
-#define EKF_EY                   1U
-#define EKF_EPSI                 2U
-#define EKF_OMEGA                3U
-#define EKF_GYRO_BIAS            4U
-#define EKF_CURVATURE            5U
-#define EKF_INNOVATION_GATE2     16.0f
-
-/* 初期観測モデル。B/Dセンサー間隔とコースのライン幅を実測した後、
- * LINE_EKF_MM_PER_PERCENTを調整してください。 */
-#define LINE_EKF_MM_PER_PERCENT  0.10f
-#define LINE_EKF_MIN_DIFF        4.0f
-#define LINE_EKF_CENTER_GATE_MM  20.0f
-#define LINE_EKF_R_EDGE_MM2      25.0f
-#define LINE_EKF_R_TRANSITION_MM2 100.0f
-#define LINE_EKF_R_CENTER_MM2    400.0f
-#define LINE_EKF_HEADING_LOOKAHEAD_MM 35.0f
-#define LINE_EKF_MAX_SIGMA_MM    20.0f
-#define LINE_EKF_MAX_SIGMA_HEADING_RAD 0.35f
-
-/* 観測ノイズの標準偏差。起動時に測定したジャイロノイズも考慮する */
-#define EKF_GYRO_STD_DPS         3.0f
-#define EKF_ENCODER_STD_DPS      12.0f
-#define EKF_MAP_CURVATURE_STD_PER_M 0.10f
-
-/* 連続時間モデルにおけるプロセスノイズの強度 */
-#define EKF_Q_S_MM2_PER_S        4.0f
-#define EKF_Q_EY_MM2_PER_S       9.0f
-#define EKF_Q_EPSI_RAD2_PER_S    0.0004f
-#define EKF_Q_OMEGA_RAD2_PER_S   0.0100f
-#define EKF_Q_BIAS_RAD2_PER_S    0.000001f
-#define EKF_Q_CURVATURE_PER_M2_PER_S 0.05f
-
 /* 正規化反射光の状態判定しきい値（黒=0、白=100） */
 #define LINE_DARK_THRESHOLD      45.0f
 #define LINE_WHITE_THRESHOLD     70.0f
@@ -207,14 +158,16 @@ typedef enum {
     RUN_END_FORCE_SENSOR,
     RUN_END_PROGRAM_EXIT,
     RUN_END_COLOR_SENSOR_ERROR,
-    RUN_END_MOTOR_ERROR
+    RUN_END_MOTOR_ERROR,
+    RUN_END_CONTROL_ERROR
 } run_end_reason_t;
 
 typedef enum {
     RUN_ERROR_NONE = 0,
     RUN_ERROR_COLOR_SENSOR_INVALID,
     RUN_ERROR_MOTOR_COMMAND,
-    RUN_ERROR_FORCE_SENSOR_SHORT_PRESS
+    RUN_ERROR_FORCE_SENSOR_SHORT_PRESS,
+    RUN_ERROR_CONTROL_CLOCK
 } run_error_code_t;
 
 typedef enum {
@@ -272,27 +225,9 @@ typedef struct {
     float distance_mm;
     float linear_speed_mm_s;
     float encoder_yaw_rate_deg_s;
-    float gyro_yaw_rate_deg_s;
-    float yaw_rate_difference_deg_s;
-    float yaw_rate_deg_s; /* EKFによる推定値 */
     float curvature_per_m;
     bool initialized;
 } odometry_t;
-
-typedef struct {
-    float x[EKF_STATE_DIM];
-    float P[EKF_STATE_DIM][EKF_STATE_DIM];
-    uint32_t rejected_line_updates;
-    bool initialized;
-} line_ekf_t;
-
-/* 現段階では経路マップを読み込みません。将来、コースマップの機能から
- * EKFが推定した経路方向の位置に応じた曲率と速度上限を取得できるようにします。 */
-typedef struct {
-    bool valid;
-    float curvature_per_m;
-    float target_speed_deg_s;
-} course_map_reference_t;
 
 /* 1サンプル分の走行記録。浮動小数点値は出力時の扱いを簡単にするため
  * 所定の倍率を掛けた整数として保持する。 */
@@ -311,22 +246,10 @@ typedef struct {
     int32_t odom_distance_mm;
     int16_t odom_heading_x10;
     int16_t encoder_yaw_x10;
-    int16_t gyro_yaw_x10;
-    int16_t yaw_difference_x10;
-    int32_t ekf_s_mm;
-    int32_t ekf_ey_mm;
-    int16_t ekf_heading_x1000;
-    int16_t ekf_yaw_x10;
-    int16_t gyro_bias_x10;
     int16_t curvature_x1000;
-    uint16_t sigma_ey_mm;
-    uint16_t sigma_heading_x1000;
-    int32_t acceleration_mm_s2[3];
-    int16_t angular_velocity_x10[3];
+    int16_t speed_mm_s;
     uint8_t line_state;
     uint8_t motion_state;
-    uint8_t line_update_accepted;
-    uint8_t reserved;
 } run_log_record_t;
 
 static volatile uint32_t control_tick_overruns = 0;
@@ -385,17 +308,6 @@ static int16_t log_i16(float value)
     return (int16_t)value;
 }
 
-static uint16_t log_u16(float value)
-{
-    if (value < 0.0f) {
-        return 0;
-    }
-    if (value > 65535.0f) {
-        return 65535;
-    }
-    return (uint16_t)value;
-}
-
 static void clear_latest_run_log(void)
 {
     run_log_count = 0;
@@ -420,12 +332,8 @@ static void append_run_log(
     int32_t motor_left,
     int32_t motor_right,
     const odometry_t *odometry,
-    const line_ekf_t *ekf,
-    const float acceleration[3],
-    const float angular_velocity[3],
     line_state_t line_state,
-    motion_state_t motion_state,
-    bool line_update_accepted)
+    motion_state_t motion_state)
 {
     run_log_record_t *record = &run_log[run_log_write_index];
 
@@ -445,34 +353,10 @@ static void append_run_log(
         log_i16(odometry->heading_rad * ODOM_RAD_TO_DEG * 10.0f);
     record->encoder_yaw_x10 =
         log_i16(odometry->encoder_yaw_rate_deg_s * 10.0f);
-    record->gyro_yaw_x10 =
-        log_i16(odometry->gyro_yaw_rate_deg_s * 10.0f);
-    record->yaw_difference_x10 =
-        log_i16(odometry->yaw_rate_difference_deg_s * 10.0f);
-    record->ekf_s_mm = (int32_t)ekf->x[EKF_S];
-    record->ekf_ey_mm = (int32_t)ekf->x[EKF_EY];
-    record->ekf_heading_x1000 =
-        log_i16(ekf->x[EKF_EPSI] * 1000.0f);
-    record->ekf_yaw_x10 =
-        log_i16(ekf->x[EKF_OMEGA] * ODOM_RAD_TO_DEG * 10.0f);
-    record->gyro_bias_x10 =
-        log_i16(ekf->x[EKF_GYRO_BIAS] * ODOM_RAD_TO_DEG * 10.0f);
-    record->curvature_x1000 =
-        log_i16(ekf->x[EKF_CURVATURE] * 1000.0f);
-    record->sigma_ey_mm =
-        log_u16(sqrtf(ekf->P[EKF_EY][EKF_EY]));
-    record->sigma_heading_x1000 =
-        log_u16(sqrtf(ekf->P[EKF_EPSI][EKF_EPSI]) * 1000.0f);
-    for (unsigned int axis = 0; axis < 3; axis++) {
-        record->acceleration_mm_s2[axis] =
-            (int32_t)acceleration[axis];
-        record->angular_velocity_x10[axis] =
-            log_i16(angular_velocity[axis] * 10.0f);
-    }
+    record->curvature_x1000 = log_i16(odometry->curvature_per_m * 1000.0f);
+    record->speed_mm_s = log_i16(odometry->linear_speed_mm_s);
     record->line_state = (uint8_t)line_state;
     record->motion_state = (uint8_t)motion_state;
-    record->line_update_accepted = line_update_accepted ? 1U : 0U;
-    record->reserved = 0U;
 
     run_log_write_index++;
     if (run_log_write_index >= RUN_LOG_CAPACITY) {
@@ -495,6 +379,7 @@ static const char *run_end_reason_name(run_end_reason_t reason)
     case RUN_END_PROGRAM_EXIT:       return "PROGRAM_EXIT";
     case RUN_END_COLOR_SENSOR_ERROR: return "COLOR_SENSOR_ERROR";
     case RUN_END_MOTOR_ERROR:        return "MOTOR_ERROR";
+    case RUN_END_CONTROL_ERROR:      return "CONTROL_ERROR";
     case RUN_END_NONE:
     default:                         return "NONE";
     }
@@ -506,47 +391,31 @@ static const char *run_error_code_name(run_error_code_t code)
     case RUN_ERROR_COLOR_SENSOR_INVALID: return "COLOR_SENSOR_INVALID";
     case RUN_ERROR_MOTOR_COMMAND:        return "MOTOR_COMMAND_FAILED";
     case RUN_ERROR_FORCE_SENSOR_SHORT_PRESS: return "FORCE_SENSOR_SHORT_PRESS";
+    case RUN_ERROR_CONTROL_CLOCK: return "CONTROL_CLOCK";
     case RUN_ERROR_NONE:
     default:                             return "NONE";
     }
 }
 
-/* 走行終了後に、校正値・IMU校正値・直前の走行ログをCSV形式でUSBへ出力する。
+/* 走行終了後に、校正値・直前の走行ログをCSV形式でUSBへ出力する。
  * この処理は周期制御を停止した通常タスク上で実行する。 */
-static bool export_latest_data(
-    const float gyro_bias[3],
-    const float gyro_stddev[3],
-    bool imu_available,
-    bool imu_fusion_enabled,
-    pup_device_t *start_stop_sensor)
+static bool export_pause(force_press_state_t *state, pup_device_t *sensor)
 {
-    force_press_state_t force_press = {0};
-    (void)update_force_press(
-        &force_press,
-        pup_force_sensor_touched(start_stop_sensor),
-        (uint32_t)fch_hrt()
-    );
-    dly_tsk(300000U);
-    if (update_force_press(
-            &force_press,
-            pup_force_sensor_touched(start_stop_sensor),
-            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
-        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
-        fflush(stdout);
-        return true;
-    }
-
-    printf("\r\n# PID_LINE_TRACER_V2_EXPORT,1\r\n");
     fflush(stdout);
     dly_tsk(20000U);
-    if (update_force_press(
-            &force_press,
-            pup_force_sensor_touched(start_stop_sensor),
-            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
-        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
-        fflush(stdout);
-        return true;
+    if (update_force_press(state, pup_force_sensor_touched(sensor),
+                           (uint32_t)fch_hrt()) != FORCE_PRESS_LONG) {
+        return false;
     }
+    printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
+    fflush(stdout);
+    return true;
+}
+
+static bool export_latest_data(pup_device_t *sensor)
+{
+    force_press_state_t press = {0};
+    printf("\r\n# PID_LINE_TRACER_V2_EXPORT,2\r\n");
     printf("# CALIBRATION,valid=%d,white_left_x10=%ld,black_left_x10=%ld,"
            "white_right_x10=%ld,black_right_x10=%ld\r\n",
            saved_calibration.valid ? 1 : 0,
@@ -554,199 +423,56 @@ static bool export_latest_data(
            (long)(saved_calibration.black_left * 10.0f),
            (long)(saved_calibration.white_right * 10.0f),
            (long)(saved_calibration.black_right * 10.0f));
-    fflush(stdout);
-    dly_tsk(20000U);
-    if (update_force_press(
-            &force_press,
-            pup_force_sensor_touched(start_stop_sensor),
-            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
-        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
-        fflush(stdout);
-        return true;
-    }
-
-    printf("# IMU,available=%d,fusion=%d,bias_x10=%ld,%ld,%ld,"
-           "stddev_x10=%ld,%ld,%ld\r\n",
-           imu_available ? 1 : 0,
-           imu_fusion_enabled ? 1 : 0,
-           (long)(gyro_bias[0] * 10.0f),
-           (long)(gyro_bias[1] * 10.0f),
-           (long)(gyro_bias[2] * 10.0f),
-           (long)(gyro_stddev[0] * 10.0f),
-           (long)(gyro_stddev[1] * 10.0f),
-           (long)(gyro_stddev[2] * 10.0f));
-    fflush(stdout);
-    dly_tsk(20000U);
-    if (update_force_press(
-            &force_press,
-            pup_force_sensor_touched(start_stop_sensor),
-            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
-        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
-        fflush(stdout);
-        return true;
-    }
-
+    if (export_pause(&press, sensor)) return true;
     printf("# SETTINGS,wheel_diameter_mm=%d,wheel_track_mm=%d,"
-           "kp_x1000=%ld,ki_x1000=%ld,kd_x1000=%ld,"
-           "line_mm_per_percent_x1000=%ld\r\n",
-           (int)WHEEL_DIAMETER_MM,
-           (int)WHEEL_TRACK_MM,
-           (long)(KP * 1000.0f),
-           (long)(KI * 1000.0f),
-           (long)(KD * 1000.0f),
-           (long)(LINE_EKF_MM_PER_PERCENT * 1000.0f));
-    fflush(stdout);
-    dly_tsk(20000U);
-    if (update_force_press(
-            &force_press,
-            pup_force_sensor_touched(start_stop_sensor),
-            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
-        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
-        fflush(stdout);
-        return true;
-    }
-
+           "kp_x1000=%ld,ki_x1000=%ld,kd_x1000=%ld\r\n",
+           (int)WHEEL_DIAMETER_MM, (int)WHEEL_TRACK_MM,
+           (long)(KP * 1000.0f), (long)(KI * 1000.0f), (long)(KD * 1000.0f));
     printf("# RUN,valid=%d,total_samples=%lu,stored_samples=%lu,"
            "overwritten_samples=%lu,duration_ms=%lu,end_reason=%s\r\n",
            latest_run_valid ? 1 : 0,
            (unsigned long)run_log_total_samples,
            (unsigned long)run_log_count,
            (unsigned long)run_log_overwritten,
-           (unsigned long)(latest_run_valid
-               ? (latest_run_end_hrt - latest_run_start_hrt) / 1000U : 0U),
+           (unsigned long)(latest_run_valid ?
+               (latest_run_end_hrt - latest_run_start_hrt) / 1000U : 0U),
            run_end_reason_name(latest_run_end_reason));
+    if (export_pause(&press, sensor)) return true;
     printf("# RUN_DIAGNOSTIC,code=%s,error_elapsed_ms=%lu,"
-           "detail_left=%ld,detail_right=%ld\r\n",
+           "detail_left=%ld,detail_right=%ld,force_press_ms=%lu\r\n",
            run_error_code_name(latest_run_error_code),
            (unsigned long)latest_run_error_elapsed_ms,
-           (long)latest_run_error_left,
-           (long)latest_run_error_right);
-    fflush(stdout);
-    dly_tsk(20000U);
-    if (update_force_press(
-            &force_press,
-            pup_force_sensor_touched(start_stop_sensor),
-            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
-        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
-        fflush(stdout);
-        return true;
-    }
-
-    printf("# LINE_STATE,0=CENTERED,1=LEFT_EDGE,2=RIGHT_EDGE,"
-           "3=BOTH_DARK,4=TRANSITION\r\n");
+           (long)latest_run_error_left, (long)latest_run_error_right,
+           (unsigned long)latest_force_press_duration_ms);
+    printf("# LINE_STATE,0=CENTERED,1=LEFT_EDGE,2=RIGHT_EDGE,3=BOTH_DARK,4=TRANSITION\r\n");
     printf("# MOTION_STATE,0=STRAIGHT,1=TURNING_LEFT,2=TURNING_RIGHT\r\n");
-    fflush(stdout);
-    dly_tsk(20000U);
-    if (update_force_press(
-            &force_press,
-            pup_force_sensor_touched(start_stop_sensor),
-            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
-        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
-        fflush(stdout);
-        return true;
-    }
+    if (export_pause(&press, sensor)) return true;
     printf("DATA_BEGIN\r\n");
-    fflush(stdout);
-    dly_tsk(20000U);
-    if (update_force_press(
-            &force_press,
-            pup_force_sensor_touched(start_stop_sensor),
-            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
-        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
-        fflush(stdout);
-        return true;
-    }
     printf("elapsed_ms,raw_left,raw_right,norm_left_x10,norm_right_x10,"
-           "line_state,motion_state,line_update,error_x10,steering_x10,"
-           "motor_left,motor_right,odom_x_mm,odom_y_mm,odom_distance_mm,"
-           "odom_heading_x10,encoder_yaw_x10,gyro_yaw_x10,yaw_diff_x10,");
-    fflush(stdout);
-    dly_tsk(20000U);
-    if (update_force_press(
-            &force_press,
-            pup_force_sensor_touched(start_stop_sensor),
-            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
-        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
-        fflush(stdout);
-        return true;
-    }
-    printf("ekf_s_mm,ekf_ey_mm,ekf_heading_x1000,ekf_yaw_x10,"
-           "gyro_bias_x10,curvature_x1000,sigma_ey_mm,sigma_heading_x1000,"
-           "accel_x_mm_s2,accel_y_mm_s2,accel_z_mm_s2,"
-           "gyro_x_x10,gyro_y_x10,gyro_z_raw_x10\r\n");
-    fflush(stdout);
-    dly_tsk(20000U);
-    if (update_force_press(
-            &force_press,
-            pup_force_sensor_touched(start_stop_sensor),
-            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
-        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
-        fflush(stdout);
-        return true;
-    }
-
+           "line_state,motion_state,error_x10,steering_x10,motor_left,motor_right,"
+           "odom_x_mm,odom_y_mm,odom_distance_mm,odom_heading_x10,"
+           "encoder_yaw_x10,curvature_x1000,speed_mm_s\r\n");
+    if (export_pause(&press, sensor)) return true;
     if (latest_run_valid) {
-        const uint32_t oldest =
-            (run_log_count == RUN_LOG_CAPACITY) ? run_log_write_index : 0U;
-
-        for (uint32_t i = 0; i < run_log_count; i++) {
-            const uint32_t index = (oldest + i) % RUN_LOG_CAPACITY;
-            const run_log_record_t *record = &run_log[index];
-
-            printf("%lu,%d,%d,%d,%d,%u,%u,%u,%ld,%d,%d,%d,"
-                   "%ld,%ld,%ld,%d,%d,%d,%d,%ld,%ld,%d,%d,%d,%d,%u,%u,"
-                   "%ld,%ld,%ld,%d,%d,%d\r\n",
-                   (unsigned long)record->elapsed_ms,
-                   (int)record->raw_left,
-                   (int)record->raw_right,
-                   (int)record->normalized_left_x10,
-                   (int)record->normalized_right_x10,
-                   (unsigned int)record->line_state,
-                   (unsigned int)record->motion_state,
-                   (unsigned int)record->line_update_accepted,
-                   (long)record->line_error_x10,
-                   (int)record->steering_x10,
-                   (int)record->motor_left,
-                   (int)record->motor_right,
-                   (long)record->odom_x_mm,
-                   (long)record->odom_y_mm,
-                   (long)record->odom_distance_mm,
-                   (int)record->odom_heading_x10,
-                   (int)record->encoder_yaw_x10,
-                   (int)record->gyro_yaw_x10,
-                   (int)record->yaw_difference_x10,
-                   (long)record->ekf_s_mm,
-                   (long)record->ekf_ey_mm,
-                   (int)record->ekf_heading_x1000,
-                   (int)record->ekf_yaw_x10,
-                   (int)record->gyro_bias_x10,
-                   (int)record->curvature_x1000,
-                   (unsigned int)record->sigma_ey_mm,
-                   (unsigned int)record->sigma_heading_x1000,
-                   (long)record->acceleration_mm_s2[0],
-                   (long)record->acceleration_mm_s2[1],
-                   (long)record->acceleration_mm_s2[2],
-                   (int)record->angular_velocity_x10[0],
-                   (int)record->angular_velocity_x10[1],
-                   (int)record->angular_velocity_x10[2]);
-            fflush(stdout);
-            dly_tsk(20000U);
-    if (update_force_press(
-            &force_press,
-            pup_force_sensor_touched(start_stop_sensor),
-            (uint32_t)fch_hrt()) == FORCE_PRESS_LONG) {
-        printf("\r\n# EXPORT_ABORTED_BY_FORCE_SENSOR_LONG_PRESS\r\n");
-        fflush(stdout);
-        return true;
-    }
+        uint32_t oldest = run_log_count == RUN_LOG_CAPACITY ? run_log_write_index : 0U;
+        for (uint32_t i = 0; i < run_log_count; ++i) {
+            const run_log_record_t *r = &run_log[(oldest + i) % RUN_LOG_CAPACITY];
+            printf("%lu,%d,%d,%d,%d,%u,%u,%ld,%d,%d,%d,%ld,%ld,%ld,%d,%d,%d,%d\r\n",
+                   (unsigned long)r->elapsed_ms, (int)r->raw_left, (int)r->raw_right,
+                   (int)r->normalized_left_x10, (int)r->normalized_right_x10,
+                   (unsigned int)r->line_state, (unsigned int)r->motion_state,
+                   (long)r->line_error_x10, (int)r->steering_x10,
+                   (int)r->motor_left, (int)r->motor_right,
+                   (long)r->odom_x_mm, (long)r->odom_y_mm, (long)r->odom_distance_mm,
+                   (int)r->odom_heading_x10, (int)r->encoder_yaw_x10,
+                   (int)r->curvature_x1000, (int)r->speed_mm_s);
+            if (export_pause(&press, sensor)) return true;
         }
     }
-
     printf("DATA_END\r\n# EXPORT_COMPLETE\r\n");
     fflush(stdout);
     return false;
 }
-
 
 static int32_t clamp_int32(int32_t value, int32_t lower, int32_t upper)
 {
@@ -797,29 +523,11 @@ static void reset_odometry(odometry_t *odometry)
     odometry->distance_mm = 0.0f;
     odometry->linear_speed_mm_s = 0.0f;
     odometry->encoder_yaw_rate_deg_s = 0.0f;
-    odometry->gyro_yaw_rate_deg_s = 0.0f;
-    odometry->yaw_rate_difference_deg_s = 0.0f;
-    odometry->yaw_rate_deg_s = 0.0f;
     odometry->curvature_per_m = 0.0f;
     odometry->initialized = false;
 }
 
-/* 標準モーターエンコーダAPIを使った差動二輪オドメトリ。
- * pup_motor_setup()で各モーターの正方向を前進方向に設定しているため、
- * 直進時は左右のエンコーダ増分がともに正になる。 */
-/* 差動二輪のエンコーダオドメトリを計算する。
- *
- * - 車輪エンコーダの角度増分から前進距離と方位変化を求める。
- * - バイアス補正済みのIMU Z軸ジャイロから機体の旋回角速度を取得する。
- * - ジャイロとエンコーダは、固定比率で混ぜずにEKFの別々の観測として扱う。
- *
- * 車輪寸法はM_S6.cの値を使用する。タイヤ直径88mm、左右車輪中心間隔144mm。
- * 両方の情報源で、正のヨー角速度は左旋回を表す。
- * （右車輪の移動量 - 左車輪の移動量）/ 車輪間隔
- */
-/* エンコーダのみを使った差動二輪オドメトリ。
- * EKFの診断用として、独立したデッドレコニング結果を保持する。
- * EKFでは、ラインに対する局所位置と旋回状態を推定する。 */
+/* 差動二輪の車輪エンコーダによる相対位置推定。 */
 static void update_odometry(
     odometry_t *odometry,
     pup_motor_t *motor_left,
@@ -898,7 +606,7 @@ static void update_odometry(
     (void)dt;
 }
 
-/* EKFの旋回角速度推定値から機体の運動状態を分類する。
+/* 車輪エンコーダの旋回角速度から機体の運動状態を分類する。
  * 正の旋回角速度は左旋回、負の旋回角速度は右旋回を表す。 */
 static motion_state_t classify_motion(float yaw_rate_deg_s)
 {
@@ -1620,13 +1328,7 @@ void Main(intptr_t exinf)
            "PID V2: default calibration B=82.4/26.4 D=72.1/21.1");
     dly_tsk(3000000);
 
-    /* IMUは使用しない。位置・方位は車輪エンコーダから推定する。 */
-    float gyro_bias[3] = {0.0f, 0.0f, 0.0f};
-    float gyro_stddev[3] = {0.0f, 0.0f, 0.0f};
-    const bool imu_available = false;
-    const bool imu_fusion_enabled = false;
-    syslog(LOG_NOTICE,
-           "PID V2: encoder odometry + B/D line feedback; IMU/EKF disabled");
+    syslog(LOG_NOTICE, "PID V2: encoder odometry + B/D line feedback");
 
     hub_speaker_set_volume(5);
     hub_speaker_play_tone(695, 200);
@@ -1709,13 +1411,7 @@ void Main(intptr_t exinf)
         if (selected == MODE_EXPORT_DATA) {
             wait_hub_buttons_released();
             hub_display_char('D');
-            const bool exit_requested = export_latest_data(
-                gyro_bias,
-                gyro_stddev,
-                imu_available,
-                imu_fusion_enabled,
-                start_stop_sensor
-            );
+            const bool exit_requested = export_latest_data(start_stop_sensor);
             if (exit_requested) {
                 pup_motor_brake(motor_left);
                 pup_motor_brake(motor_right);
@@ -1762,8 +1458,6 @@ void Main(intptr_t exinf)
     float last_steering = 0.0f;
 
     odometry_t odometry = {0};
-    line_ekf_t line_ekf = {0};
-    /* EKF is disabled; line_ekf remains zeroed only for legacy CSV compatibility. */
 
     uint32_t last_tick_hrt = 0;
     bool have_last_tick = false;
@@ -1775,10 +1469,12 @@ void Main(intptr_t exinf)
     while (1) {
         if (!wait_control_tick()) {
             syslog(LOG_ERROR, "PID V2: control semaphore wait failed");
-            stp_cyc(CYC_CONTROL_TICK);
-            pup_motor_brake(motor_left);
-            pup_motor_brake(motor_right);
-            ext_tsk();
+            latest_run_end_reason = RUN_END_CONTROL_ERROR;
+            latest_run_error_code = RUN_ERROR_CONTROL_CLOCK;
+            latest_run_end_hrt = (uint32_t)fch_hrt();
+            latest_run_error_elapsed_ms = running ?
+                (latest_run_end_hrt - run_start_hrt) / 1000U : 0U;
+            break;
         }
 
         /* 前回周期でセンサー異常・モーター異常を検出していた場合は、
@@ -1889,7 +1585,6 @@ void Main(intptr_t exinf)
                 last_steering = 0.0f;
                 pid_initialized = false;
                 reset_odometry(&odometry);
-                /* EKFは使用しない。ログ互換用構造体はゼロ初期化のまま保持。 */
 
                 syslog(LOG_NOTICE,
                        "PID V2: started by force sensor C; press_ms=%lu",
@@ -1902,10 +1597,7 @@ void Main(intptr_t exinf)
         }
 
         /* 車輪エンコーダのみで相対位置・方位・速度を更新する。 */
-        float acceleration[3] = {0.0f, 0.0f, 0.0f};
-        float angular_velocity[3] = {0.0f, 0.0f, 0.0f};
         update_odometry(&odometry, motor_left, motor_right, dt);
-        odometry.yaw_rate_deg_s = odometry.encoder_yaw_rate_deg_s;
 
         const motion_state_t motion_state =
             classify_motion(odometry.encoder_yaw_rate_deg_s);
@@ -1939,15 +1631,9 @@ void Main(intptr_t exinf)
             diagnostic_log_ticks++;
             if (diagnostic_log_ticks >= DIAGNOSTIC_LOG_INTERVAL_TICKS) {
                 diagnostic_log_ticks = 0;
-                syslog(LOG_NOTICE,
-                       "IDLE ODOM X=%ld Y=%ld D=%ld Hx10=%ld V=%ld",
-                       (long)odometry.x_mm, (long)odometry.y_mm,
-                       (long)odometry.distance_mm,
-                       (long)(odometry.heading_rad * ODOM_RAD_TO_DEG * 10.0f),
-                       (long)odometry.linear_speed_mm_s);
-                syslog(LOG_NOTICE,
-                       "IDLE ODOM YAWx10=%ld",
-                       (long)(odometry.encoder_yaw_rate_deg_s * 10.0f));
+                syslog(LOG_NOTICE, "IDLE B=%ld D=%ld C=%d",
+                       (long)idle_left, (long)idle_right,
+                       force_press.active ? 1 : 0);
             }
             continue;
         }
@@ -1996,7 +1682,6 @@ void Main(intptr_t exinf)
             classify_line_state(
                 normalized_left, normalized_right, sensor_difference);
         set_line_status_light((int)line_state);
-        const bool line_observation_accepted = false;
         float error = sensor_difference;
 
         if (line_state == LINE_STATE_CENTERED &&
@@ -2090,7 +1775,7 @@ void Main(intptr_t exinf)
             /* 幅の広いラインや交差部では直前の操舵方向を引き継ぎ、
              * エンコーダによる旋回角速度のフィードバックで回転を穏やかに抑える。 */
             steering = clamp_float(
-                last_steering + odometry_damping,
+                last_steering,
                 -steering_limit,
                 steering_limit
             );
@@ -2159,12 +1844,8 @@ void Main(intptr_t exinf)
                 left_speed,
                 right_speed,
                 &odometry,
-                &line_ekf,
-                acceleration,
-                angular_velocity,
                 line_state,
-                motion_state,
-                line_observation_accepted
+                motion_state
             );
 
             syslog(LOG_NOTICE,
@@ -2191,14 +1872,6 @@ void Main(intptr_t exinf)
             syslog(LOG_NOTICE,
                    "ODOM CURVATUREx1000=%ld",
                    (long)(odometry.curvature_per_m * 1000.0f));
-
-            syslog(LOG_NOTICE,
-                   "LINE OBS=%ld; ODOM D=%ld X=%ld Y=%ld Hx10=%ld",
-                   (long)(sensor_difference * 10.0f),
-                   (long)odometry.distance_mm,
-                   (long)odometry.x_mm,
-                   (long)odometry.y_mm,
-                   (long)(odometry.heading_rad * ODOM_RAD_TO_DEG * 10.0f));
 
             syslog(LOG_NOTICE,
                    "MOTOR CMD L=%ld R=%ld",
