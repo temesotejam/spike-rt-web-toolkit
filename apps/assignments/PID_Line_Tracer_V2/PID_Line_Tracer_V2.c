@@ -37,7 +37,7 @@
  *   - 基準速度の適応調整とモーター指令値の制限。
  *   - 車輪エンコーダだけを使う差動二輪オドメトリで相対位置・方位を推定。
  *   - B/Dカラーセンサーの左右反射光平均をPID偏差として操舵に使用。
- *   - ライン状態、反射光、モーター指令、エンコーダオドメトリを5Hzで記録。
+ *   - ライン状態、反射光、PID各項、車輪実測値を50HzでRAMに記録。
  *   - 直前の走行データと校正データをUSBシリアルへCSV出力。
  *   - フォースセンサーCの5秒長押しで、全モードからプログラムを終了。
  *   - Hub RGBライトでB/Dのライン認識状態を待機中・走行中に色表示。
@@ -75,7 +75,8 @@
 
 /* 診断ログの出力頻度は、100Hzの制御ループより低くする */
 #define DIAGNOSTIC_LOG_INTERVAL_TICKS  20U
-#define RUN_LOG_CAPACITY        512U
+#define RUN_LOG_CAPACITY        1024U
+#define RUN_LOG_INTERVAL_TICKS  2U
 
 /* Hubのモード選択ボタンを確認する周期 */
 #define MENU_POLL_US            20000U
@@ -122,19 +123,6 @@
 #define ODOM_RAD_TO_DEG          57.2957795f
 #define ODOM_YAW_RATE_THRESHOLD  8.0f
 #define ODOM_YAW_RATE_FULL       60.0f
-/* Curvature memory: learn only with the requested boundary visible.
- * A slow, leaky feedforward avoids reinforcing transient steering corrections. */
-#define CURVE_TAU_S             0.35f
-#define CURVE_LEAK_PER_S        0.7f
-#define CURVE_MAX_PER_M         8.0f
-#define CURVE_FF_GAIN           0.65f
-#define CURVE_DEADBAND_PER_M    0.35f
-#define CURVE_LEARN_MAX_ERROR   12.0f
-#define CURVE_MIN_HISTORY_S      0.50f
-#define CURVE_MIN_HISTORY_MM     30.0f
-#define CURVE_BLEND_TAU_S        0.30f
-#define BRIDGE_MAX_MM           25.0f
-#define BRIDGE_MAX_US           450000U
 #define RECOVERY_BIAS           18.0f
 #define STEERING_SLEW_DPS2      350.0f
 /* 正規化反射光の状態判定しきい値（黒=0、白=100） */
@@ -243,6 +231,8 @@ typedef struct {
     float linear_speed_mm_s;
     float encoder_yaw_rate_deg_s;
     float curvature_per_m;
+    int32_t measured_left_dps;
+    int32_t measured_right_dps;
     bool initialized;
 } odometry_t;
 
@@ -267,8 +257,14 @@ typedef struct {
     int16_t speed_mm_s;
     uint8_t line_state;
     uint8_t motion_state;
-    int16_t curve_ref_x1000;
-    int16_t feedforward_x10;
+    int16_t measured_left_dps;
+    int16_t measured_right_dps;
+    int32_t left_count_deg;
+    int32_t right_count_deg;
+    int16_t p_x10;
+    int16_t i_x10;
+    int16_t d_x10;
+    uint32_t actual_dt_us;
     uint8_t recovery;
 } run_log_record_t;
 
@@ -354,7 +350,7 @@ static void append_run_log(
     int32_t motor_right,
     const odometry_t *odometry,
     line_state_t line_state,
-    motion_state_t motion_state, float curve_ref, float feedforward, bool recovery)
+    motion_state_t motion_state, float p, float i, float d, uint32_t actual_dt_us, bool recovery)
 {
     run_log_record_t *record = &run_log[run_log_write_index];
 
@@ -378,8 +374,14 @@ static void append_run_log(
     record->speed_mm_s = log_i16(odometry->linear_speed_mm_s);
     record->line_state = (uint8_t)line_state;
     record->motion_state = (uint8_t)motion_state;
-    record->curve_ref_x1000 = log_i16(curve_ref * 1000.0f);
-    record->feedforward_x10 = log_i16(feedforward * 10.0f);
+    record->measured_left_dps = log_i16((float)odometry->measured_left_dps);
+    record->measured_right_dps = log_i16((float)odometry->measured_right_dps);
+    record->left_count_deg = odometry->previous_left_count;
+    record->right_count_deg = odometry->previous_right_count;
+    record->p_x10 = log_i16(p * 10.0f);
+    record->i_x10 = log_i16(i * 10.0f);
+    record->d_x10 = log_i16(d * 10.0f);
+    record->actual_dt_us = actual_dt_us;
     record->recovery = recovery ? 1U : 0U;
 
     run_log_write_index++;
@@ -440,7 +442,7 @@ static bool export_pause(force_press_state_t *state, pup_device_t *sensor)
 static bool export_latest_data(pup_device_t *sensor)
 {
     force_press_state_t press = {0};
-    printf("\r\n# PID_LINE_TRACER_V2_EXPORT,3\r\n");
+    printf("\r\n# PID_LINE_TRACER_V2_EXPORT,4\r\n");
     printf("# CALIBRATION,valid=%d,white_left_x10=%ld,black_left_x10=%ld,"
            "white_right_x10=%ld,black_right_x10=%ld\r\n",
            saved_calibration.valid ? 1 : 0,
@@ -469,6 +471,7 @@ static bool export_latest_data(pup_device_t *sensor)
            (unsigned long)latest_run_error_elapsed_ms,
            (long)latest_run_error_left, (long)latest_run_error_right,
            (unsigned long)latest_force_press_duration_ms);
+    printf("# CONTROL,FEEDBACK_ONLY,log_nominal_hz=50,capacity=1024\r\n");
     printf("# BOUNDARY,%s\r\n", latest_right_boundary ? "RIGHT" : "LEFT");
     printf("# LINE_STATE,0=BOTH_WHITE,1=B_DARK,2=D_DARK,3=BOTH_DARK,4=TRANSITION\r\n");
     printf("# MOTION_STATE,0=STRAIGHT,1=TURNING_LEFT,2=TURNING_RIGHT\r\n");
@@ -477,13 +480,13 @@ static bool export_latest_data(pup_device_t *sensor)
     printf("elapsed_ms,raw_left,raw_right,norm_left_x10,norm_right_x10,"
            "line_state,motion_state,error_x10,steering_x10,motor_left,motor_right,"
            "odom_x_mm,odom_y_mm,odom_distance_mm,odom_heading_x10,"
-           "encoder_yaw_x10,curvature_x1000,speed_mm_s,curve_ref_x1000,feedforward_x10,recovery\r\n");
+           "encoder_yaw_x10,curvature_x1000,speed_mm_s,measured_left_dps,measured_right_dps,left_count_deg,right_count_deg,p_x10,i_x10,d_x10,actual_dt_us,recovery\r\n");
     if (export_pause(&press, sensor)) return true;
     if (latest_run_valid) {
         uint32_t oldest = run_log_count == RUN_LOG_CAPACITY ? run_log_write_index : 0U;
         for (uint32_t i = 0; i < run_log_count; ++i) {
             const run_log_record_t *r = &run_log[(oldest + i) % RUN_LOG_CAPACITY];
-            printf("%lu,%d,%d,%d,%d,%u,%u,%ld,%d,%d,%d,%ld,%ld,%ld,%d,%d,%d,%d,%d,%d,%u\r\n",
+            printf("%lu,%d,%d,%d,%d,%u,%u,%ld,%d,%d,%d,%ld,%ld,%ld,%d,%d,%d,%d,%d,%d,%ld,%ld,%d,%d,%d,%lu,%u\r\n",
                    (unsigned long)r->elapsed_ms, (int)r->raw_left, (int)r->raw_right,
                    (int)r->normalized_left_x10, (int)r->normalized_right_x10,
                    (unsigned int)r->line_state, (unsigned int)r->motion_state,
@@ -492,7 +495,10 @@ static bool export_latest_data(pup_device_t *sensor)
                    (long)r->odom_x_mm, (long)r->odom_y_mm, (long)r->odom_distance_mm,
                    (int)r->odom_heading_x10, (int)r->encoder_yaw_x10,
                    (int)r->curvature_x1000, (int)r->speed_mm_s,
-                   (int)r->curve_ref_x1000, (int)r->feedforward_x10, (unsigned int)r->recovery);
+                   (int)r->measured_left_dps, (int)r->measured_right_dps,
+                   (long)r->left_count_deg, (long)r->right_count_deg,
+                   (int)r->p_x10, (int)r->i_x10, (int)r->d_x10,
+                   (unsigned long)r->actual_dt_us, (unsigned int)r->recovery);
             if (export_pause(&press, sensor)) return true;
         }
     }
@@ -567,10 +573,10 @@ static void update_odometry(
     const float mm_per_degree =
         (ODOM_PI * WHEEL_DIAMETER_MM) / 360.0f;
 
-    const float left_speed_mm_s =
-        (float)pup_motor_get_speed(motor_left) * mm_per_degree;
-    const float right_speed_mm_s =
-        (float)pup_motor_get_speed(motor_right) * mm_per_degree;
+    odometry->measured_left_dps = pup_motor_get_speed(motor_left);
+    odometry->measured_right_dps = pup_motor_get_speed(motor_right);
+    const float left_speed_mm_s = (float)odometry->measured_left_dps * mm_per_degree;
+    const float right_speed_mm_s = (float)odometry->measured_right_dps * mm_per_degree;
 
     odometry->linear_speed_mm_s =
         (left_speed_mm_s + right_speed_mm_s) * 0.5f;
@@ -1462,18 +1468,14 @@ void Main(intptr_t exinf)
     float recovery_direction = 0.0f;
     float last_direction = 0.0f;
     unsigned int boundary_ticks = 0;
-    float curve_ref = 0.0f;
-    float curve_history_s = 0.0f;
-    float curve_history_mm = 0.0f;
-    float curve_blend = 0.0f;
     float previous_steering = 0.0f;
-    bool had_boundary = false;
 
     odometry_t odometry = {0};
 
     uint32_t last_tick_hrt = 0;
     bool have_last_tick = false;
     unsigned int diagnostic_log_ticks = 0;
+    unsigned int run_log_ticks = 0;
 
     syslog(LOG_NOTICE, "PID V2: boundary=%s; force C starts/stops", right_boundary ? "RIGHT" : "LEFT");
 
@@ -1503,6 +1505,7 @@ void Main(intptr_t exinf)
             have_last_tick = true;
         }
         last_tick_hrt = now_hrt;
+        const uint32_t actual_dt_us = elapsed_us;
 
         if (elapsed_us < CONTROL_DT_MIN_US) {
             elapsed_us = CONTROL_PERIOD_US;
@@ -1566,12 +1569,7 @@ void Main(intptr_t exinf)
                 recovery = false;
                 boundary_ticks = 0;
                 last_direction = 0.0f;
-                curve_ref = 0.0f;
-                curve_history_s = 0.0f;
-                curve_history_mm = 0.0f;
-                curve_blend = 0.0f;
                 previous_steering = 0.0f;
-                had_boundary = false;
                 pid_initialized = false;
 
                 syslog(LOG_NOTICE,
@@ -1598,6 +1596,7 @@ void Main(intptr_t exinf)
                 latest_force_press_duration_ms = 0;
                 run_start_hrt = now_hrt;
                 diagnostic_log_ticks = 0;
+                run_log_ticks = 0;
 
                 integral = 0.0f;
                 last_error = 0.0f;
@@ -1605,12 +1604,7 @@ void Main(intptr_t exinf)
                 recovery = false;
                 boundary_ticks = 0;
                 last_direction = 0.0f;
-                curve_ref = 0.0f;
-                curve_history_s = 0.0f;
-                curve_history_mm = 0.0f;
-                curve_blend = 0.0f;
                 previous_steering = 0.0f;
-                had_boundary = false;
                 pid_initialized = false;
                 reset_odometry(&odometry);
 
@@ -1708,14 +1702,9 @@ void Main(intptr_t exinf)
         const bool matched = correct_boundary(line_state, right_boundary);
         const bool opposite = line_state == (right_boundary ? LINE_STATE_RIGHT_EDGE : LINE_STATE_LEFT_EDGE);
         if (matched) {
-            had_boundary = true;
             if (boundary_ticks < RECOVERY_CONFIRM_TICKS) ++boundary_ticks;
             if (boundary_ticks >= RECOVERY_CONFIRM_TICKS && recovery) {
                 recovery = false;
-                curve_ref = 0.0f;
-                curve_history_s = 0.0f;
-                curve_history_mm = 0.0f;
-                curve_blend = 0.0f;
                 pid_initialized = false;
                 syslog(LOG_NOTICE, "BOUNDARY reacquired");
             }
@@ -1732,35 +1721,7 @@ void Main(intptr_t exinf)
             pid_initialized = false;
             syslog(LOG_NOTICE, "BOUNDARY recovery LS=%s", line_state_name(line_state));
         }
-        /* Learn only from a continuous, reliable interval of wheel motion.
-         * No feedforward at startup or after reacquisition until both gates pass. */
-        if (!recovery) {
-            const bool reliable = matched && fabsf(error) <= CURVE_LEARN_MAX_ERROR &&
-                                  odometry.linear_speed_mm_s > 20.0f;
-            if (reliable) {
-                const float leak = clamp_float(CURVE_LEAK_PER_S * dt, 0.0f, 1.0f);
-                curve_ref *= 1.0f - leak;
-                const float measured = clamp_float(odometry.curvature_per_m,
-                                                   -CURVE_MAX_PER_M, CURVE_MAX_PER_M);
-                const float alpha = dt / (CURVE_TAU_S + dt);
-                curve_ref += alpha * (measured - curve_ref);
-                curve_history_s = fminf(CURVE_MIN_HISTORY_S, curve_history_s + dt);
-                curve_history_mm = fminf(CURVE_MIN_HISTORY_MM,
-                                         curve_history_mm + odometry.linear_speed_mm_s * dt);
-                if (curve_history_s >= CURVE_MIN_HISTORY_S &&
-                    curve_history_mm >= CURVE_MIN_HISTORY_MM) {
-                    curve_blend += dt / (CURVE_BLEND_TAU_S + dt) * (1.0f - curve_blend);
-                }
-            } else {
-                curve_history_s = 0.0f;
-                curve_history_mm = 0.0f;
-                curve_ref = 0.0f;
-                curve_blend = 0.0f;
-            }
-        }
-        const float path_curve = fabsf(curve_ref) < CURVE_DEADBAND_PER_M ? 0.0f : curve_ref;
-        const motion_state_t motion_state = classify_motion(
-            path_curve * odometry.linear_speed_mm_s * ODOM_RAD_TO_DEG / 1000.0f);
+        const motion_state_t motion_state = classify_motion(odometry.encoder_yaw_rate_deg_s);
         if (!recovery && fabsf(error) > LINE_CENTER_DEADBAND) last_direction = error > 0 ? 1.0f : -1.0f;
         if (fabsf(error) < LINE_CENTER_DEADBAND) error = 0.0f;
         if (!pid_initialized) {
@@ -1779,14 +1740,7 @@ void Main(intptr_t exinf)
 
         const float abs_error = fabsf(error);
         int32_t base_speed = calculate_base_speed(
-            abs_error, fabsf(path_curve * odometry.linear_speed_mm_s * ODOM_RAD_TO_DEG / 1000.0f));
-
-        /* 旋回が検出された場合は、直進時の速度上限を少し下げる。
-         * ライン偏差や旋回角速度がさらに大きい場合は、後続処理で追加減速する。 */
-        if (motion_state != MOTION_STATE_STRAIGHT &&
-            base_speed > BASE_SPEED_STRAIGHT - 15) {
-            base_speed = BASE_SPEED_STRAIGHT - 15;
-        }
+            abs_error, 0.0f);
 
         /* 状態が曖昧な遷移中や、幅の広いライン・交差部では減速する */
         if (recovery &&
@@ -1796,11 +1750,6 @@ void Main(intptr_t exinf)
                    base_speed > LINE_TRANSITION_MAX_SPEED) {
             base_speed = LINE_TRANSITION_MAX_SPEED;
         }
-
-        /* Differential drive: positive curvature turns left; positive steering turns right.
-         * Scale the remembered curvature to the current commanded forward speed. */
-        const float feedforward = -curve_blend * CURVE_FF_GAIN * (float)base_speed *
-                                  WHEEL_TRACK_MM * path_curve / 2000.0f;
 
         float steering_limit = MAX_STEERING;
         const float limit_from_min =
@@ -1828,7 +1777,7 @@ void Main(intptr_t exinf)
         const float p_term = KP * error;
         const float d_term = KD * derivative_filtered;
         const float candidate_output =
-            feedforward + p_term + KI * integral_candidate + d_term;
+            p_term + KI * integral_candidate + d_term;
 
         const bool pushes_high =
             candidate_output > steering_limit && error > 0.0f;
@@ -1856,15 +1805,11 @@ void Main(intptr_t exinf)
                 syslog(LOG_WARNING, "BOUNDARY recovery limit; return to menu");
                 break;
             }
-            /* Continue the last reliable arc briefly across an ambiguous region.
-             * Then search locally; never learn the search motion as course curvature. */
-            const bool bridge = had_boundary && curve_blend > 0.0f && lost_us < BRIDGE_MAX_US &&
-                                lost_mm < BRIDGE_MAX_MM && !opposite;
             float direction = recovery_direction;
             if (lost_us >= RECOVERY_MAX_US / 2U) direction = -direction;
-            steering = bridge || matched ? feedforward : direction * RECOVERY_BIAS;
+            steering = matched ? 0.0f : direction * RECOVERY_BIAS;
         } else {
-            steering = feedforward + p_term + KI * integral + d_term;
+            steering = p_term + KI * integral + d_term;
         }
 
         /* Avoid abrupt reversals at a shallow merge or on reacquisition. */
@@ -1911,12 +1856,9 @@ void Main(intptr_t exinf)
                    (int)left_result, (int)right_result);
         }
 
-        /* 5Hzの診断ログ：センサーの生値・正規化値、ライン状態、
-         * 車輪エンコーダオドメトリ、左右モーター指令値。 */
-        diagnostic_log_ticks++;
-        if (diagnostic_log_ticks >= DIAGNOSTIC_LOG_INTERVAL_TICKS) {
-            diagnostic_log_ticks = 0;
-
+        /* 50Hz RAM sampling; 5Hz live diagnostics. */
+        if (++run_log_ticks >= RUN_LOG_INTERVAL_TICKS || run_log_count == 0) {
+            run_log_ticks = 0;
             append_run_log(
                 now_hrt,
                 run_start_hrt,
@@ -1930,9 +1872,11 @@ void Main(intptr_t exinf)
                 right_speed,
                 &odometry,
                 line_state,
-                motion_state, path_curve, feedforward, recovery
+                motion_state, p_term, KI * integral, d_term, actual_dt_us, recovery
             );
-
+        }
+        if (++diagnostic_log_ticks >= DIAGNOSTIC_LOG_INTERVAL_TICKS) {
+            diagnostic_log_ticks = 0;
             syslog(LOG_NOTICE,
                    "TRACE t=%ld LS=%s MS=%s RAW=%ld,%ld",
                    (long)(now_hrt / 1000U),
@@ -1954,16 +1898,12 @@ void Main(intptr_t exinf)
                    (long)odometry.y_mm,
                    (long)odometry.distance_mm,
                    (long)odometry.linear_speed_mm_s);
-            syslog(LOG_NOTICE,
-                   "CURVE RAWx1000=%ld REFx1000=%ld FFx10=%ld FBx10=%ld REC=%d",
-                   (long)(odometry.curvature_per_m * 1000.0f),
-                   (long)(path_curve * 1000.0f),
-                   (long)(feedforward * 10.0f),
-                   (long)((recovery ? 0.0f : p_term + KI * integral + d_term) * 10.0f),
-                   recovery ? 1 : 0);
-            syslog(LOG_NOTICE, "FF CONFx100=%ld HISTORY_MS=%ld HISTORY_MM=%ld",
-                   (long)(curve_blend * 100.0f), (long)(curve_history_s * 1000.0f),
-                   (long)curve_history_mm);
+            syslog(LOG_NOTICE, "PID Px10=%ld Ix10=%ld Dx10=%ld REC=%d",
+                   (long)(p_term * 10.0f), (long)(KI * integral * 10.0f),
+                   (long)(d_term * 10.0f), recovery ? 1 : 0);
+            syslog(LOG_NOTICE, "WHEEL ACT L=%ld R=%ld DT_US=%lu",
+                   (long)odometry.measured_left_dps, (long)odometry.measured_right_dps,
+                   (unsigned long)actual_dt_us);
 
             syslog(LOG_NOTICE,
                    "MOTOR CMD L=%ld R=%ld",
