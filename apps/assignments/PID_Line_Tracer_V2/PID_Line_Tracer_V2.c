@@ -36,7 +36,7 @@
  *   - 微分項のフィルタと積分アンチワインドアップ。
  *   - 基準速度の適応調整とモーター指令値の制限。
  *   - 車輪エンコーダだけを使う差動二輪オドメトリで相対位置・方位を推定。
- *   - B/Dカラーセンサーの左右反射光差を直接PID偏差として操舵に使用。
+ *   - B/Dカラーセンサーの左右反射光平均をPID偏差として操舵に使用。
  *   - ライン状態、反射光、モーター指令、エンコーダオドメトリを5Hzで記録。
  *   - IMU/EKFは使用しない。
  *   - 直前の走行データと校正データをUSBシリアルへCSV出力。
@@ -128,7 +128,9 @@
 /* 正規化反射光の状態判定しきい値（黒=0、白=100） */
 #define LINE_DARK_THRESHOLD      45.0f
 #define LINE_WHITE_THRESHOLD     70.0f
-#define LINE_CENTER_DIFF         12.0f
+#define RECOVERY_MAX_MM          120.0f
+#define RECOVERY_MAX_US          3000000U
+#define RECOVERY_CONFIRM_TICKS   3U
 #define LINE_CENTER_DEADBAND     4.0f
 #define LINE_BOTH_DARK_MAX_SPEED 65
 #define LINE_TRANSITION_MAX_SPEED 95
@@ -137,7 +139,8 @@ typedef enum {
     MODE_LINE_TRACE = 0,
     MODE_CALIBRATION = 1,
     MODE_EXPORT_DATA = 2,
-    MODE_EXIT = 3
+    MODE_RIGHT_BOUNDARY = 3,
+    MODE_EXIT = 4
 } app_mode_t;
 
 typedef enum {
@@ -159,7 +162,8 @@ typedef enum {
     RUN_END_PROGRAM_EXIT,
     RUN_END_COLOR_SENSOR_ERROR,
     RUN_END_MOTOR_ERROR,
-    RUN_END_CONTROL_ERROR
+    RUN_END_CONTROL_ERROR,
+    RUN_END_LINE_LOST
 } run_end_reason_t;
 
 typedef enum {
@@ -203,11 +207,12 @@ typedef struct {
 } line_calibration_t;
 
 typedef enum {
-    LINE_STATE_CENTERED = 0,
+    LINE_STATE_BOTH_WHITE = 0,
     LINE_STATE_LEFT_EDGE,
     LINE_STATE_RIGHT_EDGE,
     LINE_STATE_BOTH_DARK,
-    LINE_STATE_TRANSITION
+    LINE_STATE_TRANSITION,
+    LINE_STATE_INVALID
 } line_state_t;
 
 typedef enum {
@@ -252,6 +257,7 @@ typedef struct {
     uint8_t motion_state;
 } run_log_record_t;
 
+static bool latest_right_boundary = false;
 static volatile uint32_t control_tick_overruns = 0;
 /* 実機で成功した校正値を初期値として使用する。
  * 起動後に校正を行わなくても、この値でライントレースを開始できる。
@@ -380,6 +386,7 @@ static const char *run_end_reason_name(run_end_reason_t reason)
     case RUN_END_COLOR_SENSOR_ERROR: return "COLOR_SENSOR_ERROR";
     case RUN_END_MOTOR_ERROR:        return "MOTOR_ERROR";
     case RUN_END_CONTROL_ERROR:      return "CONTROL_ERROR";
+    case RUN_END_LINE_LOST:           return "LINE_LOST";
     case RUN_END_NONE:
     default:                         return "NONE";
     }
@@ -444,7 +451,8 @@ static bool export_latest_data(pup_device_t *sensor)
            (unsigned long)latest_run_error_elapsed_ms,
            (long)latest_run_error_left, (long)latest_run_error_right,
            (unsigned long)latest_force_press_duration_ms);
-    printf("# LINE_STATE,0=CENTERED,1=LEFT_EDGE,2=RIGHT_EDGE,3=BOTH_DARK,4=TRANSITION\r\n");
+    printf("# BOUNDARY,%s\r\n", latest_right_boundary ? "RIGHT" : "LEFT");
+    printf("# LINE_STATE,0=BOTH_WHITE,1=B_DARK,2=D_DARK,3=BOTH_DARK,4=TRANSITION\r\n");
     printf("# MOTION_STATE,0=STRAIGHT,1=TURNING_LEFT,2=TURNING_RIGHT\r\n");
     if (export_pause(&press, sensor)) return true;
     printf("DATA_BEGIN\r\n");
@@ -622,9 +630,9 @@ static motion_state_t classify_motion(float yaw_rate_deg_s)
 static const char *line_state_name(line_state_t state)
 {
     switch (state) {
-    case LINE_STATE_CENTERED:   return "CENTER";
-    case LINE_STATE_LEFT_EDGE:  return "LEFT";
-    case LINE_STATE_RIGHT_EDGE: return "RIGHT";
+    case LINE_STATE_BOTH_WHITE:   return "BOTH_WHITE";
+    case LINE_STATE_LEFT_EDGE:  return "B_DARK";
+    case LINE_STATE_RIGHT_EDGE: return "D_DARK";
     case LINE_STATE_BOTH_DARK:  return "BOTH_DARK";
     case LINE_STATE_TRANSITION: return "TRANSITION";
     default:                    return "UNKNOWN";
@@ -642,66 +650,37 @@ static const char *motion_state_name(motion_state_t state)
 }
 
 
-/* 左右のセンサーでラインを挟む配置を想定する。
- * ラインが中央にある場合、通常は左右とも白で反射光がほぼ等しくなる。
- * 左右どちらかが黒を検出した場合、ラインがそのセンサー側に寄ったと判断する。
- * 両方黒の場合は交差点または幅の広いラインの可能性があり、
- * 左右位置を判断する確かな情報としては扱わない。 */
-static line_state_t classify_line_state(
-    float normalized_left,
-    float normalized_right,
-    float error)
+/* Sensor state is independent of the selected route boundary. */
+static line_state_t classify_line_state(float b, float d)
 {
-    const bool left_dark = normalized_left <= LINE_DARK_THRESHOLD;
-    const bool right_dark = normalized_right <= LINE_DARK_THRESHOLD;
-    const bool left_white = normalized_left >= LINE_WHITE_THRESHOLD;
-    const bool right_white = normalized_right >= LINE_WHITE_THRESHOLD;
-
-    if (left_dark && right_dark) {
-        return LINE_STATE_BOTH_DARK;
-    }
-    if (left_dark && right_white) {
-        return LINE_STATE_LEFT_EDGE;
-    }
-    if (right_dark && left_white) {
-        return LINE_STATE_RIGHT_EDGE;
-    }
-    if (left_white && right_white &&
-        fabsf(error) <= LINE_CENTER_DIFF) {
-        return LINE_STATE_CENTERED;
-    }
-
+    if (b <= LINE_DARK_THRESHOLD && d <= LINE_DARK_THRESHOLD) return LINE_STATE_BOTH_DARK;
+    if (b >= LINE_WHITE_THRESHOLD && d >= LINE_WHITE_THRESHOLD) return LINE_STATE_BOTH_WHITE;
+    if (b <= LINE_DARK_THRESHOLD && d >= LINE_WHITE_THRESHOLD) return LINE_STATE_LEFT_EDGE;
+    if (d <= LINE_DARK_THRESHOLD && b >= LINE_WHITE_THRESHOLD) return LINE_STATE_RIGHT_EDGE;
     return LINE_STATE_TRANSITION;
 }
 
-/* Hub RGB light: green=centered/both white, blue=left edge,
- * orange=right edge, red=both dark or invalid sensor, yellow=transition.
- * Update only when the recognized state changes. */
-static void set_line_status_light(int status)
+/* left boundary: B white / D dark; right boundary: B dark / D white. */
+static bool correct_boundary(line_state_t state, bool right_boundary)
 {
-    if (line_status_light_state == status) {
-        return;
+    return state == (right_boundary ? LINE_STATE_LEFT_EDGE : LINE_STATE_RIGHT_EDGE);
+}
+
+static void set_line_status_light(line_state_t state, bool right_boundary)
+{
+    int color_state = correct_boundary(state, right_boundary) ? 0 :
+        state == LINE_STATE_BOTH_WHITE ? 1 :
+        state == LINE_STATE_BOTH_DARK ? 2 :
+        state == LINE_STATE_TRANSITION ? 3 : 4;
+    if (line_status_light_state == color_state) return;
+    switch (color_state) {
+    case 0: hub_light_on_color(PBIO_COLOR_GREEN); break;
+    case 1: hub_light_on_color(PBIO_COLOR_BLUE); break;
+    case 2: hub_light_on_color(PBIO_COLOR_ORANGE); break;
+    case 3: hub_light_on_color(PBIO_COLOR_YELLOW); break;
+    default: hub_light_on_color(PBIO_COLOR_RED); break;
     }
-    switch (status) {
-    case LINE_STATE_CENTERED:
-        hub_light_on_color(PBIO_COLOR_GREEN);
-        break;
-    case LINE_STATE_LEFT_EDGE:
-        hub_light_on_color(PBIO_COLOR_BLUE);
-        break;
-    case LINE_STATE_RIGHT_EDGE:
-        hub_light_on_color(PBIO_COLOR_ORANGE);
-        break;
-    case LINE_STATE_BOTH_DARK:
-    case 5:
-        hub_light_on_color(PBIO_COLOR_RED);
-        break;
-    case LINE_STATE_TRANSITION:
-    default:
-        hub_light_on_color(PBIO_COLOR_YELLOW);
-        break;
-    }
-    line_status_light_state = status;
+    line_status_light_state = color_state;
 }
 
 static void clear_line_status_light(void)
@@ -793,6 +772,8 @@ static void show_selected_mode(app_mode_t selected)
         hub_display_char('C');
     } else if (selected == MODE_EXPORT_DATA) {
         hub_display_char('D');
+    } else if (selected == MODE_RIGHT_BOUNDARY) {
+        hub_display_char('R');
     } else {
         hub_display_char('L');
     }
@@ -806,7 +787,7 @@ static const char *selected_mode_name(app_mode_t selected)
     if (selected == MODE_EXPORT_DATA) {
         return "DATA EXPORT";
     }
-    return "LINE TRACE";
+    return selected == MODE_RIGHT_BOUNDARY ? "RIGHT BOUNDARY" : "LEFT BOUNDARY";
 }
 
 /* 左右ボタンで3つのモードを選び、中央ボタンで決定する。
@@ -822,7 +803,7 @@ static app_mode_t select_mode(
     clear_line_status_light();
     show_selected_mode(selected);
     syslog(LOG_NOTICE,
-           "PID V2: LEFT/RIGHT=SELECT L/C/D, CENTER=CONFIRM");
+           "PID V2: LEFT/RIGHT=SELECT L/C/D/R, CENTER=CONFIRM");
 
     wait_hub_buttons_released();
 
@@ -859,7 +840,7 @@ static app_mode_t select_mode(
 
         if (left_rise) {
             selected = (selected == MODE_LINE_TRACE)
-                ? MODE_EXPORT_DATA
+                ? MODE_RIGHT_BOUNDARY
                 : (app_mode_t)(selected - 1);
             show_selected_mode(selected);
             if (selected != MODE_EXPORT_DATA) {
@@ -868,7 +849,7 @@ static app_mode_t select_mode(
                        selected_mode_name(selected));
             }
         } else if (right_rise) {
-            selected = (selected == MODE_EXPORT_DATA)
+            selected = (selected == MODE_RIGHT_BOUNDARY)
                 ? MODE_LINE_TRACE
                 : (app_mode_t)(selected + 1);
             show_selected_mode(selected);
@@ -1442,7 +1423,8 @@ void Main(intptr_t exinf)
             continue;
         }
 
-        hub_display_char('L');
+        const bool right_boundary = selected == MODE_RIGHT_BOUNDARY;
+        hub_display_char(right_boundary ? 'R' : 'L');
 
     bool running = false;
     bool run_finished = false;
@@ -1455,7 +1437,12 @@ void Main(intptr_t exinf)
     float integral = 0.0f;
     float last_error = 0.0f;
     float derivative_filtered = 0.0f;
-    float last_steering = 0.0f;
+    bool recovery = false;
+    uint32_t recovery_start = 0;
+    float recovery_distance = 0.0f;
+    float recovery_direction = 0.0f;
+    float last_direction = 0.0f;
+    unsigned int boundary_ticks = 0;
 
     odometry_t odometry = {0};
 
@@ -1463,8 +1450,7 @@ void Main(intptr_t exinf)
     bool have_last_tick = false;
     unsigned int diagnostic_log_ticks = 0;
 
-    syslog(LOG_NOTICE,
-           "PID V2: line trace ready; force sensor C starts/stops");
+    syslog(LOG_NOTICE, "PID V2: boundary=%s; force C starts/stops", right_boundary ? "RIGHT" : "LEFT");
 
     while (1) {
         if (!wait_control_tick()) {
@@ -1552,7 +1538,9 @@ void Main(intptr_t exinf)
                 integral = 0.0f;
                 last_error = 0.0f;
                 derivative_filtered = 0.0f;
-                last_steering = 0.0f;
+                recovery = false;
+                boundary_ticks = 0;
+                last_direction = 0.0f;
                 pid_initialized = false;
 
                 syslog(LOG_NOTICE,
@@ -1568,6 +1556,7 @@ void Main(intptr_t exinf)
                 run_finished = false;
                 clear_latest_run_log();
                 latest_run_valid = true;
+                latest_right_boundary = right_boundary;
                 latest_run_start_hrt = now_hrt;
                 latest_run_end_hrt = 0;
                 latest_run_end_reason = RUN_END_RUNNING;
@@ -1582,7 +1571,9 @@ void Main(intptr_t exinf)
                 integral = 0.0f;
                 last_error = 0.0f;
                 derivative_filtered = 0.0f;
-                last_steering = 0.0f;
+                recovery = false;
+                boundary_ticks = 0;
+                last_direction = 0.0f;
                 pid_initialized = false;
                 reset_odometry(&odometry);
 
@@ -1610,7 +1601,7 @@ void Main(intptr_t exinf)
                 pup_color_sensor_reflection(sensor_right);
             if (!valid_reflection(idle_left) ||
                 !valid_reflection(idle_right)) {
-                set_line_status_light(5);
+                set_line_status_light(LINE_STATE_INVALID, right_boundary);
             } else {
                 const float idle_norm_left = normalize_reflection(
                     idle_left,
@@ -1622,9 +1613,8 @@ void Main(intptr_t exinf)
                     saved_calibration.white_right);
                 const line_state_t idle_state = classify_line_state(
                     idle_norm_left,
-                    idle_norm_right,
-                    idle_norm_left - idle_norm_right);
-                set_line_status_light((int)idle_state);
+                    idle_norm_right);
+                set_line_status_light(idle_state, right_boundary);
             }
 
             /* 待機中はモーターを動かさず、オドメトリだけを診断する。 */
@@ -1656,7 +1646,7 @@ void Main(intptr_t exinf)
             latest_run_error_left = reflection_left;
             latest_run_error_right = reflection_right;
             latest_run_end_hrt = now_hrt;
-            set_line_status_light(5);
+            set_line_status_light(LINE_STATE_INVALID, right_boundary);
             pid_initialized = false;
             integral = 0.0f;
             derivative_filtered = 0.0f;
@@ -1675,25 +1665,38 @@ void Main(intptr_t exinf)
             saved_calibration.white_right
         );
 
-        /* B/Dの正規化反射光差を直接PID偏差として使う。 */
-        const float sensor_difference =
-            normalized_left - normalized_right;
-        const line_state_t line_state =
-            classify_line_state(
-                normalized_left, normalized_right, sensor_difference);
-        set_line_status_light((int)line_state);
-        float error = sensor_difference;
-
-        if (line_state == LINE_STATE_CENTERED &&
-            fabsf(error) < LINE_CENTER_DEADBAND) {
-            error = 0.0f;
+        const line_state_t line_state = classify_line_state(normalized_left, normalized_right);
+        set_line_status_light(line_state, right_boundary);
+        const float sign = right_boundary ? -1.0f : 1.0f;
+        float error = sign * ((normalized_left + normalized_right) * 0.5f - 50.0f);
+        const bool matched = correct_boundary(line_state, right_boundary);
+        const bool opposite = line_state == (right_boundary ? LINE_STATE_RIGHT_EDGE : LINE_STATE_LEFT_EDGE);
+        if (matched) {
+            if (boundary_ticks < RECOVERY_CONFIRM_TICKS) ++boundary_ticks;
+            if (boundary_ticks >= RECOVERY_CONFIRM_TICKS && recovery) {
+                recovery = false;
+                pid_initialized = false;
+                syslog(LOG_NOTICE, "BOUNDARY reacquired");
+            }
+        } else {
+            boundary_ticks = 0;
         }
-
+        if (!recovery && (opposite || line_state == LINE_STATE_BOTH_WHITE ||
+                          line_state == LINE_STATE_BOTH_DARK)) {
+            recovery = true;
+            recovery_start = now_hrt;
+            recovery_distance = odometry.distance_mm;
+            recovery_direction = opposite ? last_direction : (error >= 0.0f ? 1.0f : -1.0f);
+            if (recovery_direction == 0.0f) recovery_direction = sign;
+            pid_initialized = false;
+            syslog(LOG_NOTICE, "BOUNDARY recovery LS=%s", line_state_name(line_state));
+        }
+        if (!recovery && fabsf(error) > LINE_CENTER_DEADBAND) last_direction = error > 0 ? 1.0f : -1.0f;
+        if (fabsf(error) < LINE_CENTER_DEADBAND) error = 0.0f;
         if (!pid_initialized) {
             last_error = error;
             derivative_filtered = 0.0f;
             integral = 0.0f;
-            last_steering = 0.0f;
             pid_initialized = true;
         }
 
@@ -1716,7 +1719,7 @@ void Main(intptr_t exinf)
         }
 
         /* 状態が曖昧な遷移中や、幅の広いライン・交差部では減速する */
-        if (line_state == LINE_STATE_BOTH_DARK &&
+        if (recovery &&
             base_speed > LINE_BOTH_DARK_MAX_SPEED) {
             base_speed = LINE_BOTH_DARK_MAX_SPEED;
         } else if (line_state == LINE_STATE_TRANSITION &&
@@ -1765,28 +1768,33 @@ void Main(intptr_t exinf)
 
         /* 左右両方のセンサーが黒を検出している間は積分しない。
          * この状態では、左右位置の差を信頼できる形で取得できないため。 */
-        if (line_state != LINE_STATE_BOTH_DARK &&
+        if (!recovery &&
             !pushes_high && !pushes_low) {
             integral = integral_candidate;
         }
 
         float steering;
-        if (line_state == LINE_STATE_BOTH_DARK) {
-            /* 幅の広いラインや交差部では直前の操舵方向を引き継ぎ、
-             * エンコーダによる旋回角速度のフィードバックで回転を穏やかに抑える。 */
-            steering = clamp_float(
-                last_steering,
-                -steering_limit,
-                steering_limit
-            );
+        if (recovery) {
+            /* Bounded search, initially toward the last known boundary.
+             * Reverse search direction once if the first sweep fails. */
+            uint32_t lost_us = now_hrt - recovery_start;
+            float lost_mm = fabsf(odometry.distance_mm - recovery_distance);
+            if (lost_us >= RECOVERY_MAX_US || lost_mm >= RECOVERY_MAX_MM) {
+                pup_motor_brake(motor_left);
+                pup_motor_brake(motor_right);
+                latest_run_end_reason = RUN_END_LINE_LOST;
+                latest_run_end_hrt = now_hrt;
+                syslog(LOG_WARNING, "BOUNDARY recovery limit; return to menu");
+                break;
+            }
+            float direction = recovery_direction;
+            if (lost_us >= RECOVERY_MAX_US / 2U) direction = -direction;
+            steering = direction * steering_limit;
+            if (matched) steering = 0.0f;
         } else {
-            steering = clamp_float(
-                p_term + KI * integral + d_term + odometry_damping,
-                -steering_limit,
-                steering_limit
-            );
+            steering = clamp_float(p_term + KI * integral + d_term + odometry_damping,
+                                   -steering_limit, steering_limit);
         }
-
 
         int32_t left_speed =
             (int32_t)((float)base_speed + steering + 0.5f);
@@ -1795,7 +1803,6 @@ void Main(intptr_t exinf)
 
         left_speed = clamp_speed(left_speed);
         right_speed = clamp_speed(right_speed);
-        last_steering = steering;
 
         const pbio_error_t left_result =
             pup_motor_set_speed(motor_left, left_speed);
@@ -1818,7 +1825,7 @@ void Main(intptr_t exinf)
             pid_initialized = false;
             integral = 0.0f;
             derivative_filtered = 0.0f;
-            last_steering = 0.0f;
+
             odometry.initialized = false;
 
             syslog(LOG_ERROR,
